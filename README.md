@@ -1,2 +1,2 @@
-# MAI623_DSC514_The_Overfitters_Spring_2026
+# MAI623_DSC514_TheOverfitters_Spring_2026
 This is the repository for MAI623_DSC514 Project
