@@ -1,0 +1,25 @@
+datasets
+jupytext
+levenshtein
+matplotlib
+nltk
+numpy
+pandas
+plotly
+scikit-learn
+seaborn
+sentence-transformers
+tqdm
+twokenize
+umap-learn
+# IDE
+cairosvg
+grip
+ipython
+ipywidgets
+jupyter
+kaleido
+notebook
+pnglatex
+pynvim
+pyperclip
