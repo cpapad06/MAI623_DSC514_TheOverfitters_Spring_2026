@@ -10,9 +10,11 @@ nltk
 numpy
 pandas
 plotly
+pyarrow
 pyyaml
 scikit-learn
 seaborn
+sqlalchemy
 sentence-transformers
 tqdm
 twokenize

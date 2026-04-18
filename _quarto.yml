@@ -1,7 +1,7 @@
 project:
   type: default
   output-dir: docs
-  execute-dir: project
+  execute-dir: file
   render:
     - src/audience-aware-variation-in-agent-generated-language.qmd
 

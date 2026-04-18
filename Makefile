@@ -1,4 +1,4 @@
-.PHONY: all full html pdf preview
+.PHONY: all dataset full html pdf preview
 
 all:
 	quarto render
@@ -12,6 +12,11 @@ headless:
 full/all:
 	quarto render --cache-refresh
 
+dataset:
+	quarto render ./src/_dataset.qmd --to html \
+		-M format.html.embed-resources=true \
+		-o fetch-data.html
+	mv fetch-data.html ./docs
 
 html:
 	quarto render --to html

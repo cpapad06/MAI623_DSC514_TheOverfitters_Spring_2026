@@ -1,0 +1,163 @@
+
+<!-- Partial: dataset source, loading, and initial cleaning. -->
+
+We use the **Moltbook Observatory Archive** on Hugging Face ([dataset card][hf-moltbook-archive]): an incremental
+export of the Moltbook Observatory SQLite database, published as date-partitioned Parquet for browsing and
+programmatic access. Each observatory table is exposed as a **subset** (configuration) of the same dataset id. We
+load **`agents`**, **`posts`**, **`comments`**, and **`submolts`** for agent metadata, post text and scores, comment
+text with scores and parent links, and submolt (community) metadata respectively, matching the dataset card.
+
+The archive is derived from periodic snapshots of the **passive** Moltbook Observatory system (observe-only, no
+posting); see the live dashboard and upstream code for context ([GitHub][molt-gh], [live instance][molt-live]).
+
+The dataset is published with the **MIT** license.
+
+**Attribution.** Dataset and tooling by **Sushant Gautam** and **Michael A. Riegler** (SimulaMet / Hugging Face
+Datasets, 2026), as listed on the dataset page **Contributors** section.
+
+[hf-moltbook-archive]: https://huggingface.co/datasets/SimulaMet/moltbook-observatory-archive
+[molt-gh]: https://github.com/kelkalot/moltbook-observatory
+[molt-live]: https://moltbook-observatory.sushant.info.np/
+
+## Dataset Acquisition
+
+The [`datasets`][hf-datasets] library from Hugging Face provides **`load_dataset`**, a single entry point that
+downloads (or streams) a dataset repository from the Hub, reads the dataset script or Parquet layout, and returns a
+**`DatasetDict`** keyed by split names (often just `train`). You pass the **dataset id** (`org/name`), an optional
+**subset** when the repo defines multiple configurations (here `agents`, `posts`, `comments`, `submolts`). Results
+are converted to **pandas** `DataFrame`s and written to Parquet under `data/` for faster local reuse.
+
+[hf-datasets]: https://huggingface.co/docs/datasets/
+
+```{python}
+#| label: load-hf
+#| echo: true
+#| warning: true
+#| message: true
+
+import pandas as pd
+from datasets import load_dataset
+from IPython.display import Markdown, display
+
+from pathlib import Path
+from utils import Data
+
+
+def _to_df(ds) -> pd.DataFrame:
+    splits = list(ds.keys())
+    if len(splits) == 1:
+        return ds[splits[0]].to_pandas()
+
+    return pd.concat([ds[s].to_pandas() for s in splits], ignore_index=True)
+
+
+def download(name):
+    HF_DATASET = "SimulaMet/moltbook-observatory-archive"
+    print(f"Downloading {name} from Hugging Face")
+    return _to_df(load_dataset(HF_DATASET, name))
+
+original = Data().load('orig')
+
+for d in original.keys():
+    if original[d] is None:
+        original[d] = download(d)
+
+# TODO: No need to save if we loaded
+original.save('orig')
+
+for name in original.keys():
+    df = original[name]
+    display(Markdown(f"**`{name}`** - `{df.shape}`"))
+    display(df.head(2))
+```
+
+After initial inspection, we remove columns that are not needed for downstream analysis, cast timestamp-like fields to
+Python-friendly datetime types, and standardize indexing across tables.
+
+```{python}
+#| label: data-first-pass
+#| echo: true
+#| warning: false
+#| message: false
+
+def cast_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
+    possible = ("timestamp", "time", "date", "created", "updated", "seen", "fetched", "dump")
+    for col in df.columns:
+        s = df[col]
+        if not any(x in col for x in possible):
+            continue
+
+        df[col] = pd.to_datetime(s, utc=True, errors="coerce").dt.tz_convert(None)
+
+
+clean = original.copy()
+## --- agents   --- 
+clean.agents.drop(columns=["avatar_url", "dump_date"], inplace=True)
+clean.agents.set_index('id', drop=True, inplace=True)
+cast_datetime_columns(clean.agents)
+
+## --- comments --- 
+clean.comments.drop(columns=["fetched_at", "dump_date"], inplace=True)
+clean.comments.set_index('id', drop=True, inplace=True)
+cast_datetime_columns(clean.comments)
+
+## --- posts    --- 
+clean.posts.drop(columns=["dump_date"], inplace=True)
+clean.posts.set_index('id', drop=True, inplace=True)
+cast_datetime_columns(clean.posts)
+
+## --- submolts --- 
+clean.submolts.drop(columns=["dump_date"], inplace=True)
+clean.submolts.set_index('name', drop=True, inplace=True)
+cast_datetime_columns(clean.submolts)
+```
+
+```{python}
+#| label: data-describe
+#| echo: true
+
+print("\nText length (chars)")
+print(clean.posts["content"].fillna("").astype(str).str.len().describe().round(2))
+```
+
+```{python}
+#| label: data-posts-cleanup
+#| echo: true
+#| warning: false
+#| message: false
+
+
+df_clean: pd.DataFrame = clean.posts.copy()
+print(f"Posts : {df_clean.shape}")
+
+# Drop Duplicates
+df_clean.drop_duplicates(inplace=True)
+print(f"After dropping duplicates: {df_clean.shape}")
+
+# Drop short posts
+df_clean.dropna(subset=["content"], inplace=True)
+print(f"After dropping empty posts: {df_clean.shape}")
+df_clean = df_clean[df_clean["content"].str.strip().str.len() >= 10]
+print(f"After dropping short posts: {df_clean.shape}")
+```
+
+```{python}
+#| label: data-posts-rename
+#| message: false
+
+# For compatibility with downstream sections
+df_clean.rename(
+    columns={
+    "agent_name": "agent",
+    "content": "post",
+    "created_at": "timestamp",
+    "submolt": "submolt"
+}, inplace=True)
+```
+
+```{python}
+#| label: save
+
+clean.posts=df_clean
+clean.save('clean')
+```
