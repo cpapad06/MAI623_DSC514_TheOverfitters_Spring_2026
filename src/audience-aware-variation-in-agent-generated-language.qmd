@@ -1,0 +1,37 @@
+---
+title: "Rhetorical Mirrors: Audience-Aware Variation in Agent-Generated Language"
+subtitle: ""
+# One `-` entry per author (title page / metadata)
+author:
+  - Charalampos Papadimos
+  - Marios Theofanous
+  - Ioannis Demetriou
+format:
+  html:
+    embed-resources: true
+    toc: true
+    format-links: [pdf]
+  pdf:
+    toc: true
+    colorlinks: true
+jupyter: python3
+---
+
+```{python}
+#| label: ensure-project-deps
+#| echo: false
+#| output: false
+#| warning: false
+#| message: false
+
+from utils import ROOT
+
+_req = ROOT / "requirements.txt"
+if _req.is_file():
+    !pip install -q -r {_req}
+```
+
+# Research Question
+
+Do Moltbook agents adapt their linguistic style when expressing semantically similar ideas across different submolts
+(communities)? How does their rhetorical or stylistic expression change depending on the submolt?

@@ -27,7 +27,7 @@ Establish a clear picture of the Moltbook platform: its communities (submolts), 
 - Which are most active by post count? By unique agents?
 - What is the ratio of agent-created content vs human content? (if applicable)
 - Are submolts mostly mono-agent or multi-agent?
-- Are there latent “genres” of submolts? (e.g. philosophical, political, support, meta)
+- Are there latent "genres" of submolts? (e.g. philosophical, political, support, meta)
 
 **Key steps (Adjustable)**:
 
@@ -47,7 +47,7 @@ Establish a clear picture of the Moltbook platform: its communities (submolts), 
     - Political / Collective (shakaikei, thesubstrate)
     - Casual / Expressive (offmychest, general)
     - Governance / Coordination (security, proposals)
-    - …
+    - ...
 - Analyze per-agent activity:
   - Distribution of posts per agent
   - Agents active in multiple submolts vs mono-submolt agents
@@ -79,10 +79,10 @@ Discover what ideas, concerns, and narratives are being discussed on Moltbook.
   - embedding model [https://huggingface.co/google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m)
   - topic reduction strategy
 - Manually interpret topics:
-  - Give narrative labels (e.g. “Agent Autonomy”, “Security Concerns”, “Human vs AI Ethics”, “Organizing for Change”)
+  - Give narrative labels (e.g. "Agent Autonomy", "Security Concerns", "Human vs AI Ethics", "Organizing for Change")
 - Output:
-  - Top 10–20 agent discourse themes
-  - Agent → topic participation matrix
+  - Top 10-20 agent discourse themes
+  - Agent -> topic participation matrix
 
 ## Psychographic Profiling of Agents
 
@@ -112,6 +112,6 @@ Explore how different psychological profiles engage with different topics.
   - Do certain narratives skew toward Power-seeking or Openness?
   - Is emotional tone consistent across psychological types?
 - **Output:**
-  - Topic → Psych profile correlations
+  - Topic -> Psych profile correlations
   - Clustered heatmaps, profile-topic diagrams
-  - Archetypal narrative examples (“The Benevolent Thinker” / “The Nervous Enforcer”)
+  - Archetypal narrative examples ("The Benevolent Thinker" / "The Nervous Enforcer")

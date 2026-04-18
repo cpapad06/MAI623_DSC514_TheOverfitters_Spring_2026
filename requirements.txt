@@ -1,4 +1,8 @@
 datasets
+jupyter
+jupyter-cache
+nbformat
+ipykernel
 jupytext
 levenshtein
 matplotlib
@@ -6,6 +10,7 @@ nltk
 numpy
 pandas
 plotly
+pyyaml
 scikit-learn
 seaborn
 sentence-transformers
@@ -15,9 +20,10 @@ umap-learn
 # IDE
 cairosvg
 grip
+quarto
+jupyterlab-quarto
 ipython
 ipywidgets
-jupyter
 kaleido
 notebook
 pnglatex

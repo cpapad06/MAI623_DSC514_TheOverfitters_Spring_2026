@@ -1,0 +1,17 @@
+project:
+  type: default
+  output-dir: docs
+  execute-dir: project
+  render:
+    - src/audience-aware-variation-in-agent-generated-language.qmd
+
+execute:
+  freeze: true
+  cache: true  # requires: jupyter-cache
+
+format:
+  html:
+    embed-resources: true
+  pdf:  # requires: LaTeX engine (e.g. `quarto install tinytex`)
+    toc: true
+    colorlinks: true

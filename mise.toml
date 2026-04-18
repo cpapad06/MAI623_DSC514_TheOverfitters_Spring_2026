@@ -1,0 +1,10 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[env]
+# Automatically create/load the virtualenv
+_.python.venv = { path = ".venv", create = true }
+
+[tasks]
+sync-python = "uv venv --allow-existing && uv pip install -r requirements.txt --python .venv/bin/python3"
