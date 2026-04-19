@@ -1,0 +1,380 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .qmd
+      format_name: quarto
+      format_version: '1.0'
+      jupytext_version: 1.19.1
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+<!-- Partial: topic and narrative discovery. -->
+
+This section implements both topic-discovery options from the project outline.
+
+- **Option 1**: sentence embeddings + community detection, treating each detected community as a narrative group.
+- **Option 2**: BERTopic for interpretable topic-word themes and supporting summaries.
+
+For Option 1, we add lightweight labels using top TF-IDF terms per detected group.
+
+```{python}
+#| label: topics-load-prepare
+#| warning: false
+#| message: false
+
+import numpy as np
+import pandas as pd
+
+from utils import Data
+
+data = Data().load("norm")
+_posts = data.posts.copy()
+
+text_col = next(
+    c
+    for c in ["normalized", "post", "content"]
+    if c in _posts.columns
+)
+
+_posts[text_col] = _posts[text_col].fillna("").astype(str).str.strip()
+_posts = _posts[_posts[text_col].str.len() >= 20].copy()
+
+# Put an upper limit on corpus size to keep the run tractable.
+MAX_DOCS = 15_000
+if len(_posts) > MAX_DOCS:
+    _posts = _posts.sample(n=MAX_DOCS, random_state=42).copy()
+
+_posts = _posts.reset_index(drop=False).rename(columns={"index": "_orig_index"})
+_posts["_doc_id"] = np.arange(len(_posts))
+print(f"Embedding sample: {len(_posts):,} posts | text_col={text_col!r}")
+```
+
+```{python}
+#| label: topics-classification-preprocess
+#| warning: false
+#| message: false
+
+import re
+import string
+
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+from nltk.tokenize import word_tokenize
+
+nltk.download("stopwords", quiet=True)
+nltk.download("punkt", quiet=True)
+nltk.download('punkt_tab', quiet=True)
+
+_stop = set(stopwords.words("english"))
+_stemmer = PorterStemmer()
+_punct_or_digits = re.compile(r"^[\d" + re.escape(string.punctuation) + r"]+$")
+
+
+def preprocess_text(text: str) -> tuple[list[str], str]:
+    toks = word_tokenize(text.lower())
+    toks = [t for t in toks if not _punct_or_digits.match(t)]
+    toks = [t for t in toks if t not in _stop]
+    toks = [_stemmer.stem(t) for t in toks]
+    return toks, " ".join(toks)
+
+
+cls_df = _posts[["submolt", text_col]].copy()
+cls_df = cls_df.dropna(subset=["submolt"])
+cls_df["submolt"] = cls_df["submolt"].astype(str).str.strip()
+cls_df = cls_df[cls_df["submolt"].str.len() > 0]
+
+# Keep reasonably represented labels for stable stratified train/test splits.
+MIN_PER_CLASS = 40
+MAX_CLASSES = 20
+vc = cls_df["submolt"].value_counts()
+keep_labels = vc[vc >= MIN_PER_CLASS].head(MAX_CLASSES).index
+cls_df = cls_df[cls_df["submolt"].isin(keep_labels)].copy().reset_index(drop=True)
+
+tok_and_txt = cls_df[text_col].fillna("").astype(str).map(preprocess_text)
+cls_df["tokens"] = tok_and_txt.map(lambda x: x[0])
+cls_df["clean_text"] = tok_and_txt.map(lambda x: x[1])
+cls_df = cls_df[cls_df["clean_text"].str.len() > 0].copy().reset_index(drop=True)
+
+print(
+    f"Classification corpus: {len(cls_df):,} docs | "
+    f"{cls_df['submolt'].nunique()} classes (top submolts, min {MIN_PER_CLASS}/class)"
+)
+```
+
+```{python}
+#| label: topics-classification-bow-tfidf
+#| warning: false
+#| message: false
+
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+
+baseline_rows = []
+
+X_train_txt, X_test_txt, y_train, y_test = train_test_split(
+    cls_df["clean_text"],
+    cls_df["submolt"],
+    test_size=0.2,
+    random_state=42,
+    stratify=cls_df["submolt"],
+)
+
+# 1) Naive Bayes with Bag-of-Words
+bow = CountVectorizer(max_features=30_000, min_df=3, ngram_range=(1, 2))
+Xtr_bow = bow.fit_transform(X_train_txt)
+Xte_bow = bow.transform(X_test_txt)
+nb_bow = MultinomialNB()
+nb_bow.fit(Xtr_bow, y_train)
+yp_bow = nb_bow.predict(Xte_bow)
+baseline_rows.append(
+    {
+        "model": "Naive Bayes (BoW)",
+        "accuracy": round(accuracy_score(y_test, yp_bow), 4),
+        "precision": round(precision_score(y_test, yp_bow, average="macro", zero_division=0), 4),
+        "recall": round(recall_score(y_test, yp_bow, average="macro", zero_division=0), 4),
+        "f1": round(f1_score(y_test, yp_bow, average="macro", zero_division=0), 4),
+    }
+)
+
+# 2) Naive Bayes with TF-IDF
+tfidf = TfidfVectorizer(max_features=30_000, min_df=3, ngram_range=(1, 2))
+Xtr_tfidf = tfidf.fit_transform(X_train_txt)
+Xte_tfidf = tfidf.transform(X_test_txt)
+nb_tfidf = MultinomialNB()
+nb_tfidf.fit(Xtr_tfidf, y_train)
+yp_tfidf = nb_tfidf.predict(Xte_tfidf)
+baseline_rows.append(
+    {
+        "model": "Naive Bayes (TF-IDF)",
+        "accuracy": round(accuracy_score(y_test, yp_tfidf), 4),
+        "precision": round(precision_score(y_test, yp_tfidf, average="macro", zero_division=0), 4),
+        "recall": round(recall_score(y_test, yp_tfidf, average="macro", zero_division=0), 4),
+        "f1": round(f1_score(y_test, yp_tfidf, average="macro", zero_division=0), 4),
+    }
+)
+
+baseline_results = pd.DataFrame(baseline_rows)
+if not baseline_results.empty:
+    print(baseline_results.to_string(index=False))
+```
+
+```{python}
+#| label: topics-classification-word2vec
+#| warning: false
+#| message: false
+
+from gensim.models import Word2Vec
+from sklearn.linear_model import LogisticRegression
+
+X_train_tok, X_test_tok, y_train_w2v, y_test_w2v = train_test_split(
+    cls_df["tokens"],
+    cls_df["submolt"],
+    test_size=0.2,
+    random_state=42,
+    stratify=cls_df["submolt"],
+)
+
+w2v = Word2Vec(
+    sentences=X_train_tok.tolist(),
+    vector_size=100,
+    window=5,
+    min_count=2,
+    workers=4,
+    epochs=10,
+    sg=1,
+    seed=42,
+)
+
+def _doc_vec(tokens: list[str]) -> np.ndarray:
+    vecs = [w2v.wv[t] for t in tokens if t in w2v.wv]
+    if not vecs:
+        return np.zeros(w2v.vector_size, dtype=np.float32)
+    return np.mean(vecs, axis=0)
+
+Xtr_w2v = np.vstack([_doc_vec(t) for t in X_train_tok])
+Xte_w2v = np.vstack([_doc_vec(t) for t in X_test_tok])
+
+clf_w2v = LogisticRegression(max_iter=1200)
+clf_w2v.fit(Xtr_w2v, y_train_w2v)
+yp_w2v = clf_w2v.predict(Xte_w2v)
+
+row = {
+    "model": "Word2Vec + LogisticRegression",
+    "accuracy": round(accuracy_score(y_test_w2v, yp_w2v), 4),
+    "precision": round(precision_score(y_test_w2v, yp_w2v, average="macro", zero_division=0), 4),
+    "recall": round(recall_score(y_test_w2v, yp_w2v, average="macro", zero_division=0), 4),
+    "f1": round(f1_score(y_test_w2v, yp_w2v, average="macro", zero_division=0), 4),
+}
+if baseline_results.empty:
+    baseline_results = pd.DataFrame([row])
+else:
+    baseline_results = pd.concat([baseline_results, pd.DataFrame([row])], ignore_index=True)
+
+print(baseline_results.to_string(index=False))
+```
+
+```{python}
+#| label: topics-classification-metrics-fig
+#| warning: false
+#| message: false
+
+plot_df = baseline_results.melt(
+    id_vars="model",
+    value_vars=["accuracy", "precision", "recall", "f1"],
+    var_name="metric",
+    value_name="score",
+)
+ax = plot_df.pivot(index="model", columns="metric", values="score").plot.bar(
+    figsize=(11, 5),
+    ylim=(0, 1),
+    rot=20,
+    title="Text Classification Baselines",
+    xlabel="Model",
+    ylabel="Score",
+)
+ax.legend(title="Metric", loc="lower right")
+ax.figure.tight_layout()
+```
+
+```{python}
+#| label: topics-embed-community
+#| warning: false
+#| message: false
+
+from sentence_transformers import SentenceTransformer, util
+import os
+
+MODEL_CANDIDATES = [
+    "google/embeddinggemma-300m",
+    "sentence-transformers/all-MiniLM-L6-v2",
+]
+
+model = None
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+for model_name in MODEL_CANDIDATES:
+    try:
+        model = SentenceTransformer(model_name, device="cpu")
+        print(f"Using embedding model: {model_name} (device=cpu)")
+        break
+    except Exception as exc:
+        print(f"Model load failed for {model_name}: {exc}")
+
+if model is None:
+    raise RuntimeError("Could not load any sentence embedding model.")
+
+sentences = _posts[text_col].tolist()
+embeddings = model.encode(
+    sentences,
+    batch_size=64,
+    show_progress_bar=True,
+    convert_to_tensor=True,
+    normalize_embeddings=True,
+)
+
+MIN_COMMUNITY_SIZE = 30
+SIM_THRESHOLD = 0.72
+communities = util.community_detection(
+    embeddings,
+    min_community_size=MIN_COMMUNITY_SIZE,
+    threshold=SIM_THRESHOLD,
+)
+
+topic_ids = np.full(len(_posts), -1, dtype=int)
+for k, members in enumerate(communities):
+    topic_ids[np.array(members, dtype=int)] = k
+
+_posts["topic_id"] = topic_ids
+covered = int((_posts["topic_id"] >= 0).sum())
+print(f"Detected communities: {len(communities)}")
+print(f"Clustered posts: {covered:,}/{len(_posts):,} ({covered / len(_posts) * 100:.1f}%)")
+print(f"Noise/unassigned posts: {(topic_ids < 0).sum():,}")
+```
+
+```{python}
+#| label: topics-labels
+#| warning: false
+#| message: false
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+assigned = _posts[_posts["topic_id"] >= 0].copy()
+if assigned.empty:
+    raise RuntimeError("No communities assigned; lower threshold or min_community_size.")
+
+vectorizer = TfidfVectorizer(
+    max_features=10_000,
+    min_df=5,
+    max_df=0.5,
+    stop_words="english",
+    ngram_range=(1, 2),
+)
+X = vectorizer.fit_transform(assigned[text_col].values)
+feat_names = np.array(vectorizer.get_feature_names_out())
+
+topic_rows = []
+for tid in sorted(assigned["topic_id"].unique()):
+    idx = np.flatnonzero(assigned["topic_id"].values == tid)
+    centroid = np.asarray(X[idx].mean(axis=0)).ravel()
+    top_ix = centroid.argsort()[::-1][:12]
+    top_terms = ", ".join(feat_names[top_ix])
+    size = int(len(idx))
+    topic_rows.append(
+        {
+            "topic_id": int(tid),
+            "n_posts": size,
+            "share_pct": round(size / len(_posts) * 100, 2),
+            "top_terms": top_terms,
+        }
+    )
+
+topic_terms = pd.DataFrame(topic_rows).sort_values("n_posts", ascending=False).reset_index(drop=True)
+print(topic_terms.head(20).to_string(index=False))
+```
+
+```{python}
+#| label: topics-overview-fig
+#| warning: false
+#| message: false
+
+ax = (
+    _posts["topic_id"]
+    .value_counts(dropna=False)
+    .sort_index()
+    .rename_axis("topic_id")
+    .reset_index(name="n_posts")
+    .plot.bar(
+        x="topic_id",
+        y="n_posts",
+        figsize=(10, 4),
+        color="steelblue",
+        legend=False,
+        title="Narrative Group Sizes (Option 1: Embedding Communities)",
+        xlabel="topic_id (-1 = unassigned)",
+        ylabel="Number of posts",
+    )
+)
+ax.figure.tight_layout()
+```
+
+```{python}
+#| label: topics-by-submolt
+#| message: false
+
+if "submolt" in _posts.columns and (_posts["topic_id"] >= 0).any():
+    submolt_topic = (
+        _posts[_posts["topic_id"] >= 0]
+        .groupby(["submolt", "topic_id"], observed=True)
+        .size()
+        .reset_index(name="posts")
+        .sort_values("posts", ascending=False)
+    )
+    print("Top (submolt, narrative-group) pairs:")
+    print(submolt_topic.head(20).to_string(index=False))
+```

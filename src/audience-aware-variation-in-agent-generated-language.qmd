@@ -57,3 +57,7 @@ Do Moltbook agents adapt their linguistic style when expressing semantically sim
 # Preprocessing
 
 {{< include _preprocess.qmd >}}
+
+# Topic and Narrative Discovery
+
+{{< include _topic_narrative.qmd >}}

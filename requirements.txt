@@ -1,11 +1,14 @@
+bertopic
 datasets
+gensim
+hdbscan
+ipykernel
 jupyter
 jupyter-cache
-nbformat
-ipykernel
 jupytext
 levenshtein
 matplotlib
+nbformat
 nltk
 numpy
 pandas
@@ -15,11 +18,12 @@ pyspark
 pyyaml
 scikit-learn
 seaborn
-sqlalchemy
 sentence-transformers
+sqlalchemy
 tqdm
 twokenize
 umap-learn
+wordcloud
 # IDE
 cairosvg
 grip
