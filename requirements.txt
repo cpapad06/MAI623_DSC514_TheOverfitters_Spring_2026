@@ -15,6 +15,7 @@ pandas
 plotly
 pyarrow
 pyspark
+python-dotenv
 pyyaml
 scikit-learn
 seaborn

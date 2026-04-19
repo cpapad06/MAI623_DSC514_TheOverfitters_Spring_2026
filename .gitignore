@@ -1,3 +1,4 @@
+.env
 /.quarto/
 **/*.quarto_ipynb
 .jupyter_cache/

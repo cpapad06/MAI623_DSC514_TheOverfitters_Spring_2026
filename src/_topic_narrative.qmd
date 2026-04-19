@@ -22,6 +22,33 @@ This section implements both topic-discovery options from the project outline.
 For Option 1, we add lightweight labels using top TF-IDF terms per detected group.
 
 ```{python}
+#| label: topics-runtime-debug
+#| warning: false
+#| message: false
+
+import platform
+from os import getenv
+
+import torch
+from dotenv import load_dotenv
+from utils import ROOT
+
+_env_path = ROOT / ".env"
+load_dotenv(dotenv_path=_env_path, override=False)
+
+print("Runtime debug:")
+print(f"  Python          : {platform.python_version()}")
+print(f"  Torch           : {torch.__version__}")
+print(f"  Torch CUDA build: {torch.version.cuda}")
+print(f"  CUDA available  : {torch.cuda.is_available()}")
+print(f"  .env path       : {_env_path}")
+print(f"  HF_TOKEN found  : {bool(getenv('HF_TOKEN'))}")
+if torch.cuda.is_available():
+    print(f"  GPU             : {torch.cuda.get_device_name(0)}")
+    print(f"  GPU CC          : {torch.cuda.get_device_capability(0)}")
+```
+
+```{python}
 #| label: topics-load-prepare
 #| warning: false
 #| message: false
@@ -355,7 +382,7 @@ ax = (
         figsize=(10, 4),
         color="steelblue",
         legend=False,
-        title="Narrative Group Sizes (Option 1: Embedding Communities)",
+        title="Narrative Group Sizes",
         xlabel="topic_id (-1 = unassigned)",
         ylabel="Number of posts",
     )
