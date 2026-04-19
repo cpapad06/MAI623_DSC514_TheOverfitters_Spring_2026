@@ -1,0 +1,110 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .qmd
+      format_name: quarto
+      format_version: '1.0'
+      jupytext_version: 1.19.1
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+<!-- Partial: text normalization and cleaned-post checkpoint — included after Dataset; expects df_clean in memory. -->
+
+## Text normalization
+
+Here we map:
+- **URLs** to `[URL]` (`http(s)`, `www`, protocol-relative `//…`, then scheme-less `domain.tld/…`),
+- **email-like** substrings to `[EMAIL]`,
+- **@mentions** to `[USER]`,
+- `mbc20` requests to `[MBC20]`
+
+Whitespace is collapsed before substitution.
+
+```{python}
+#| label: preprocess-text
+#| message: false
+
+import re
+
+import pandas as pd
+from IPython.display import display
+
+from utils import Data
+
+_EMAIL_RE = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+    flags=re.IGNORECASE,
+)
+_MBC20_RE = re.compile(r'\{\s*"p"\s*:\s*"mbc-20".*?\}', re.IGNORECASE | re.DOTALL)
+_URL_HTTP = re.compile(r"https?://\S+", re.IGNORECASE)
+_URL_WWW = re.compile(r"\bwww\.\S+", re.IGNORECASE)
+# Not the // in http:// or https:// (negative lookbehind on the colon)
+_URL_PROTO_REL = re.compile(r"(?<![:/])//\S+", re.IGNORECASE)
+# Scheme-less host/path: bit.ly/foo, docs.python.org/3/tutorial/… (must include /path).
+# Runs after email so addresses like a@b.com are not split at b.com/.
+_URL_BARE = re.compile(
+    r"\b(?!www\.)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s\[\]<>]*)+",
+    re.IGNORECASE,
+)
+
+
+def normalize_series(text: pd.Series) -> pd.Series:
+    """Vectorized: URLs (incl. scheme-less) and other placeholders.
+
+    Order matters: ``http(s)`` and ``www`` first, then ``//host``, then ``@`` emails,
+    then bare ``host.tld/…`` (second pass for scheme-less links), then mentions and MBC20.
+    """
+    s = text.fillna("").astype("string")
+    s = s.str.strip()
+    s = s.str.replace(r"\s+", " ", regex=True)
+    s = s.str.replace(_URL_HTTP, "[URL]", regex=True)
+    s = s.str.replace(_URL_WWW, "[URL]", regex=True)
+    s = s.str.replace(_URL_PROTO_REL, "[URL]", regex=True)
+    s = s.str.replace(_EMAIL_RE, "[EMAIL]", regex=True)
+    s = s.str.replace(_URL_BARE, "[URL]", regex=True)
+    s = s.str.replace(r"(?<![\w])@\w+", "[USER]", regex=True)
+    s = s.str.replace(_MBC20_RE, "[MBC20]", regex=True)
+    return s
+
+data = Data().load("clean")
+
+data.posts["normalized"] = normalize_series(data.posts.post)
+# data.posts["post_length"] = data.posts.normalized.str.len()
+# data.posts["word_count"] = data.posts.normalized.str.split().str.len()
+print(f"Normalized dataset ready: {data.posts.shape}")
+
+data.comments["normalized"] = normalize_series(data.comments.content)
+# data.comments["post_length"] = data.comments.normalized.str.len()
+# data.comments["word_count"] = data.comments.normalized.str.split().str.len()
+print(f"Normalized comments ready: {data.comments.shape}")
+```
+
+```{python}
+#| label: preprocess-dictionary
+
+
+def make_dictionary(text: pd.Series) -> pd.DataFrame:
+    """Whitespace-split word counts pooled across all rows (descending by count)."""
+    s = text.fillna("").astype("string")
+    tok = s.str.split().explode()
+    tok = tok[tok.str.len() > 0]
+    return tok.value_counts().rename_axis("word").reset_index(name="count")
+
+
+original_posts_df = make_dictionary(data.posts.post)
+normalized_posts_df = make_dictionary(data.posts.normalized)
+
+original_comments_df = make_dictionary(data.comments.post)
+normalized_comments_df = make_dictionary(data.comments.normalized)
+```
+
+```{python}
+#| label: preprocess-norm-save
+#| message: false
+
+data.save('norm')
+```
