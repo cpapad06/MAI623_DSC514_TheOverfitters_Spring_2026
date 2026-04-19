@@ -1,16 +1,5 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .qmd
-      format_name: quarto
-      format_version: '1.0'
-      jupytext_version: 1.19.1
-  kernelspec:
-    display_name: Python 3 (ipykernel)
-    language: python
-    name: python3
----
+
+
 
 <!-- Partial: topic and narrative discovery. -->
 
@@ -20,6 +9,7 @@ This section implements both topic-discovery options from the project outline.
 - **Option 2**: BERTopic for interpretable topic-word themes and supporting summaries.
 
 For Option 1, we add lightweight labels using top TF-IDF terms per detected group.
+
 
 ```{python}
 #| label: topics-runtime-debug
@@ -276,6 +266,7 @@ ax.figure.tight_layout()
 #| message: false
 
 from sentence_transformers import SentenceTransformer, util
+import gc
 import torch
 
 MODEL_CANDIDATES = [
@@ -297,13 +288,45 @@ if model is None:
     raise RuntimeError("Could not load any sentence embedding model.")
 
 sentences = _posts[text_col].tolist()
-embeddings = model.encode(
-    sentences,
-    batch_size=64,
-    show_progress_bar=True,
-    convert_to_tensor=True,
-    normalize_embeddings=True,
-)
+
+def _encode_with_fallback(_model, _sentences, prefer_device: str):
+    """Try progressively smaller batches; fall back to CPU on CUDA OOM."""
+    batch_plan = [64, 32, 16, 8, 4]
+
+    for bs in batch_plan:
+        try:
+            return _model.encode(
+                _sentences,
+                batch_size=bs,
+                show_progress_bar=True,
+                convert_to_tensor=True,
+                normalize_embeddings=True,
+            )
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower() and prefer_device == "cuda":
+                print(f"CUDA OOM at batch_size={bs}; retrying with smaller batch...")
+                torch.cuda.empty_cache()
+                gc.collect()
+                continue
+            raise
+
+    if prefer_device == "cuda":
+        print("Falling back to CPU encoding due to repeated CUDA OOM.")
+        _model.to("cpu")
+        torch.cuda.empty_cache()
+        gc.collect()
+        return _model.encode(
+            _sentences,
+            batch_size=8,
+            show_progress_bar=True,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+        )
+
+    raise RuntimeError("Encoding failed on all fallback batch sizes.")
+
+
+embeddings = _encode_with_fallback(model, sentences, device)
 
 MIN_COMMUNITY_SIZE = 30
 SIM_THRESHOLD = 0.72
@@ -404,4 +427,169 @@ if "submolt" in _posts.columns and (_posts["topic_id"] >= 0).any():
     )
     print("Top (submolt, narrative-group) pairs:")
     print(submolt_topic.head(20).to_string(index=False))
+```
+
+
+
+```{python}
+#| label: bertopic-fit
+#| warning: false
+#| message: false
+
+from bertopic import BERTopic
+from hdbscan import HDBSCAN
+from sklearn.feature_extraction.text import CountVectorizer
+from umap import UMAP
+
+docs = _posts[text_col].fillna("").astype(str).tolist()
+emb_np = embeddings.detach().cpu().numpy()
+
+umap_model = UMAP(
+    n_neighbors=15,
+    n_components=5,
+    min_dist=0.0,
+    metric="cosine",
+    random_state=42,
+)
+hdbscan_model = HDBSCAN(
+    min_cluster_size=30,
+    min_samples=10,
+    metric="euclidean",
+    cluster_selection_method="eom",
+    prediction_data=True,
+)
+vectorizer_model = CountVectorizer(
+    stop_words="english",
+    min_df=5,
+    ngram_range=(1, 2),
+)
+
+topic_model = BERTopic(
+    embedding_model=None,  # we pass precomputed embeddings below
+    umap_model=umap_model,
+    hdbscan_model=hdbscan_model,
+    vectorizer_model=vectorizer_model,
+    min_topic_size=30,
+    nr_topics="auto",
+    calculate_probabilities=False,
+    verbose=False,
+)
+
+bertopic_topics, _ = topic_model.fit_transform(docs, embeddings=emb_np)
+_posts["bertopic_id"] = bertopic_topics
+
+n_assigned = int((_posts["bertopic_id"] != -1).sum())
+print(f"BERTopic topics (excluding -1): {len(set(t for t in bertopic_topics if t != -1))}")
+print(f"Assigned posts: {n_assigned:,}/{len(_posts):,} ({n_assigned/len(_posts)*100:.1f}%)")
+print(f"Outlier (-1) posts: {int((_posts['bertopic_id'] == -1).sum()):,}")
+```
+
+```{python}
+#| label: bertopic-theme-table
+#| warning: false
+#| message: false
+
+topic_info = topic_model.get_topic_info().copy()
+topic_info = topic_info.rename(
+    columns={
+        "Topic": "topic_id",
+        "Name": "topic_name",
+        "Count": "n_posts",
+    }
+)
+topic_info = topic_info.sort_values("n_posts", ascending=False).reset_index(drop=True)
+
+topic_info["share_pct"] = (topic_info["n_posts"] / len(_posts) * 100).round(2)
+
+def _topic_terms(topic_id: int, top_k: int = 10) -> str:
+    if topic_id == -1:
+        return "(outliers / mixed)"
+    terms = topic_model.get_topic(topic_id) or []
+    return ", ".join([t for t, _ in terms[:top_k]])
+
+topic_info["top_terms"] = topic_info["topic_id"].map(_topic_terms)
+
+# Lightweight manual-style narrative labels from top keywords (editable by hand).
+def _narrative_label(row) -> str:
+    if row["topic_id"] == -1:
+        return "Outliers / mixed"
+    lead = [w.strip() for w in row["top_terms"].split(",")[:3] if w.strip()]
+    return "Narrative: " + " | ".join(lead) if lead else f"Narrative #{row['topic_id']}"
+
+topic_info["narrative_label"] = topic_info.apply(_narrative_label, axis=1)
+
+top_themes = topic_info.head(20)[
+    ["topic_id", "n_posts", "share_pct", "narrative_label", "top_terms"]
+]
+print(top_themes.to_string(index=False))
+```
+
+```{python}
+#| label: bertopic-theme-fig
+#| warning: false
+#| message: false
+
+plot_topics = topic_info.head(15).copy()
+ax = plot_topics.plot.bar(
+    x="topic_id",
+    y="n_posts",
+    figsize=(11, 4),
+    color="mediumpurple",
+    legend=False,
+    title="BERTopic Theme Sizes",
+    xlabel="BERTopic topic_id",
+    ylabel="Number of posts",
+)
+ax.figure.tight_layout()
+```
+
+```{python}
+#| label: bertopic-agent-topic-matrix
+#| warning: false
+#| message: false
+
+if "agent" in _posts.columns and (_posts["bertopic_id"] != -1).any():
+    agent_topic = (
+        _posts[_posts["bertopic_id"] != -1]
+        .groupby(["agent", "bertopic_id"], observed=True)
+        .size()
+        .reset_index(name="posts")
+    )
+
+    # Keep the matrix readable in the report.
+    top_agents = (
+        agent_topic.groupby("agent", observed=True)["posts"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(25)
+        .index
+    )
+    top_topics = (
+        agent_topic.groupby("bertopic_id", observed=True)["posts"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(12)
+        .index
+    )
+
+    agent_topic_matrix = (
+        agent_topic[
+            agent_topic["agent"].isin(top_agents)
+            & agent_topic["bertopic_id"].isin(top_topics)
+        ]
+        .pivot_table(
+            index="agent",
+            columns="bertopic_id",
+            values="posts",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .sort_index(axis=1)
+    )
+
+    print("Agent x BERTopic participation matrix (top agents/topics):")
+    print(agent_topic_matrix.to_string())
+else:
+    agent_topic_matrix = pd.DataFrame()
+    print("No `agent` column or no assigned BERTopic groups; skipping agent-topic matrix.")
 ```
