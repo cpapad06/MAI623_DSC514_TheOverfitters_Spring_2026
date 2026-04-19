@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame as SparkDataFrame
+    from pyspark.sql import SparkSession
 
 def repo_root() -> Path:
     """Directory that contains `requirements.txt` (repository root)."""
@@ -55,7 +59,7 @@ class Data:
     def load(self, tag: str):
         for d in self.__slots__:
             path = self.DATA_DIR / f'{d}-{tag}.parquet'
-            if path.is_file():
+            if path.exists():
                 setattr(self, d, pd.read_parquet(path))
                 print('Loaded:', path)
 
@@ -76,4 +80,61 @@ class Data:
             comments=self.comments if self.comments.copy() is not None else None,
             posts=self.posts if self.posts.copy() is not None else None,
             submolts=self.submolts if self.submolts.copy() is not None else None,
+        )
+
+
+class SparkData(Data):
+    """Mirror of ``Data`` backed by Spark DataFrames."""
+
+    __slots__ = ("spark",)
+    DATA_DIR: Path = DATA_DIR
+
+    def __init__(
+        self,
+        spark: "SparkSession",
+        /,
+        agents: "SparkDataFrame | None" = None,
+        comments: "SparkDataFrame | None" = None,
+        posts: "SparkDataFrame | None" = None,
+        submolts: "SparkDataFrame | None" = None,
+    ):
+        super().__init__(agents=agents, comments=comments, posts=posts, submolts=submolts)
+        self.spark = spark
+
+    def load(self, tag: str):
+        for d in Data.__slots__:
+            path = self.DATA_DIR / f"{d}-{tag}.parquet"
+            if path.exists():
+                try:
+                    sdf = self.spark.read.parquet(str(path))
+                except Exception as exc:
+                    if "TIMESTAMP(NANOS" not in str(exc):
+                        raise
+                    print(f"Spark parquet reader hit nanos timestamps for {d}; using pandas fallback.")
+                    pdf = pd.read_parquet(path)
+                    for c in pdf.columns:
+                        if pd.api.types.is_datetime64_any_dtype(pdf[c]):
+                            pdf[c] = pd.to_datetime(pdf[c], errors="coerce").dt.floor("us")
+                    sdf = self.spark.createDataFrame(pdf)
+                setattr(self, d, sdf)
+                print("Loaded:", path)
+        return self
+
+    def save(self, tag: str):
+        for d in Data.__slots__:
+            df = getattr(self, d)
+            if df is None:
+                continue
+            path = self.DATA_DIR / f"{d}-{tag}.parquet"
+            df.write.mode("overwrite").parquet(str(path))
+            print("Saved:", path)
+
+    def copy(self):
+        # Spark DataFrames are immutable plans; shallow reference copy is typically enough.
+        return SparkData(
+            self.spark,
+            agents=self.agents,
+            comments=self.comments,
+            posts=self.posts,
+            submolts=self.submolts,
         )

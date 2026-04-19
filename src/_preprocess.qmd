@@ -1,110 +1,219 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .qmd
-      format_name: quarto
-      format_version: '1.0'
-      jupytext_version: 1.19.1
-  kernelspec:
-    display_name: Python 3 (ipykernel)
-    language: python
-    name: python3
----
 
-<!-- Partial: text normalization and cleaned-post checkpoint — included after Dataset; expects df_clean in memory. -->
+<!-- Partial: text normalization and lexical summaries. -->
 
-## Text normalization
+## Text Normalization
 
 Here we map:
-- **URLs** to `[URL]` (`http(s)`, `www`, protocol-relative `//…`, then scheme-less `domain.tld/…`),
+- **URLs** to `[URL]` (`http(s)`, `www`, protocol-relative `//...`, then scheme-less `domain.tld/...`),
 - **email-like** substrings to `[EMAIL]`,
 - **@mentions** to `[USER]`,
 - `mbc20` requests to `[MBC20]`
 
 Whitespace is collapsed before substitution.
 
+This stage runs in **Apache Spark** (local mode): read Parquet -> normalize -> derive optional word-count tables -> write
+Parquet outputs. A **Java 8+** runtime must be available on `PATH`. On smaller machines, JVM startup overhead can be
+noticeable; Spark becomes more beneficial as data size grows.
+
 ```{python}
-#| label: preprocess-text
+#| label: preprocess-spark-pipeline
 #| message: false
 
-import re
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
+from utils import SparkData, DATA_DIR
+
+# Java regex patterns (same order as the old pandas pipeline). (?i) / (?is) = case / dotall.
+_RE_EMAIL = r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+_RE_MBC20 = r'(?is)\{\s*"p"\s*:\s*"mbc-20".*?\}'
+_RE_BARE = (
+    r"(?i)\b(?!www\.)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s\[\]<>]*)+"
+)
+
+
+def _normalize_spark_column(c: F.Column) -> F.Column:
+    x = F.trim(F.coalesce(c.cast("string"), F.lit("")))
+    x = F.regexp_replace(x, r"\s+", " ")
+    x = F.regexp_replace(x, r"(?i)https?://\S+", "[URL]")
+    x = F.regexp_replace(x, r"(?i)\bwww\.\S+", "[URL]")
+    x = F.regexp_replace(x, r"(?i)(?<![:/])//\S+", "[URL]")
+    x = F.regexp_replace(x, _RE_EMAIL, "[EMAIL]")
+    x = F.regexp_replace(x, _RE_BARE, "[URL]")
+    x = F.regexp_replace(x, r"(?i)(?<![\w])@\w+", "[USER]")
+    x = F.regexp_replace(x, _RE_MBC20, "[MBC20]")
+    return x
+
+
+def _word_count_col(c: F.Column) -> F.Column:
+    t = F.trim(F.coalesce(c, F.lit("")))
+    return F.when(F.length(t) == 0, F.lit(0)).otherwise(F.size(F.split(t, " ")))
+
+
+def make_dictionary_spark(sdf: DataFrame, text_col: str) -> DataFrame:
+    """Whitespace-split word counts pooled across all rows (descending by count)."""
+    col = F.trim(F.coalesce(F.col(text_col), F.lit("")))
+    words = sdf.select(F.explode(F.split(col, r"\s+")).alias("word"))
+    words = words.filter(F.length(F.col("word")) > 0)
+    return words.groupBy("word").count().orderBy(F.desc("count"), F.col("word"))
+
+
+def _save_bow(sdf: DataFrame, name: str) -> None:
+    p = DATA_DIR / f"{name}-bow.parquet"
+    sdf.coalesce(1).write.mode("overwrite").parquet(str(p))
+    print("Saved:", p)
+
+
+spark = (
+    SparkSession.builder.appName("moltbook-preprocess")
+    .master("local[*]")
+    .config("spark.driver.memory", "4g")
+    .config("spark.executor.memory", "4g")
+    .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+    .config("spark.sql.legacy.parquet.nanosAsLong", "true")
+    .config("spark.sql.parquet.enableVectorizedReader", "false")
+    .config("spark.hadoop.parquet.read.vectored.io.enabled", "false")
+    .config("spark.sql.files.maxPartitionBytes", str(64 * 1024 * 1024))
+    .config("spark.sql.shuffle.partitions", "8")
+    .config("spark.ui.showConsoleProgress", "false")
+    .getOrCreate()
+)
+spark.sparkContext.setLogLevel("WARN")
+
+data = SparkData(spark).load("clean")
+posts = data.posts
+if posts is None:
+    raise FileNotFoundError(f"Missing posts-clean.parquet under {DATA_DIR}")
+
+posts = (
+    posts.withColumn("normalized", _normalize_spark_column(F.col("post")))
+    .withColumn("post_length", F.length(F.col("normalized")))
+    .withColumn("word_count", _word_count_col(F.col("normalized")))
+)
+posts = posts.persist()
+print(f"Normalized posts: {posts.count()} rows")
+data.posts = posts
+
+comments = data.comments
+if comments is not None:
+    comments = (
+        comments.withColumn("normalized", _normalize_spark_column(F.col("content")))
+        .withColumn("post_length", F.length(F.col("normalized")))
+        .withColumn("word_count", _word_count_col(F.col("normalized")))
+    )
+    comments = comments.persist()
+    print(f"Normalized comments: {comments.count()} rows")
+data.comments = comments
+
+original_posts_df = make_dictionary_spark(posts, "post")
+normalized_posts_df = make_dictionary_spark(posts, "normalized")
+
+if comments is not None:
+    original_comments_df = make_dictionary_spark(comments, "content")
+    normalized_comments_df = make_dictionary_spark(comments, "normalized")
+else:
+    original_comments_df = None
+    normalized_comments_df = None
+
+data.save("norm")
+_save_bow(normalized_posts_df, "posts")
+if normalized_comments_df is not None:
+    _save_bow(normalized_comments_df, "comments")
+```
+
+```{python}
+#| label: preprocess-dictionary-plots
+#| warning: false
+#| fig-cap: Token-frequency distributions and placeholder-token counts in normalized text.
+#| message: false
+
+import matplotlib.pyplot as plt
 import pandas as pd
 from IPython.display import display
 
-from utils import Data
 
-_EMAIL_RE = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
-    flags=re.IGNORECASE,
+def _to_rank_df(sdf, top_n: int = 5000) -> pd.DataFrame | None:
+    if sdf is None:
+        return None
+    pdf = sdf.select("word", "count").limit(top_n).toPandas()
+    if pdf.empty:
+        return None
+    pdf["rank"] = range(1, len(pdf) + 1)
+    return pdf
+
+
+rank_posts_orig = _to_rank_df(original_posts_df)
+rank_posts_norm = _to_rank_df(normalized_posts_df)
+rank_comments_orig = _to_rank_df(original_comments_df) if original_comments_df is not None else None
+rank_comments_norm = _to_rank_df(normalized_comments_df) if normalized_comments_df is not None else None
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Posts distribution
+ax = axes[0]
+if rank_posts_orig is not None:
+    ax.loglog(rank_posts_orig["rank"], rank_posts_orig["count"], label="Original posts", alpha=0.85)
+if rank_posts_norm is not None:
+    ax.loglog(rank_posts_norm["rank"], rank_posts_norm["count"], label="Normalized posts", alpha=0.85)
+ax.set(
+    title="Posts Dictionary Distribution (Rank vs Count)",
+    xlabel="Token rank",
+    ylabel="Token frequency",
 )
-_MBC20_RE = re.compile(r'\{\s*"p"\s*:\s*"mbc-20".*?\}', re.IGNORECASE | re.DOTALL)
-_URL_HTTP = re.compile(r"https?://\S+", re.IGNORECASE)
-_URL_WWW = re.compile(r"\bwww\.\S+", re.IGNORECASE)
-# Not the // in http:// or https:// (negative lookbehind on the colon)
-_URL_PROTO_REL = re.compile(r"(?<![:/])//\S+", re.IGNORECASE)
-# Scheme-less host/path: bit.ly/foo, docs.python.org/3/tutorial/… (must include /path).
-# Runs after email so addresses like a@b.com are not split at b.com/.
-_URL_BARE = re.compile(
-    r"\b(?!www\.)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s\[\]<>]*)+",
-    re.IGNORECASE,
+ax.legend()
+
+# Comments distribution
+ax = axes[1]
+if rank_comments_orig is not None:
+    ax.loglog(rank_comments_orig["rank"], rank_comments_orig["count"], label="Original comments", alpha=0.85)
+if rank_comments_norm is not None:
+    ax.loglog(rank_comments_norm["rank"], rank_comments_norm["count"], label="Normalized comments", alpha=0.85)
+ax.set(
+    title="Comments Dictionary Distribution (Rank vs Count)",
+    xlabel="Token rank",
+    ylabel="Token frequency",
+)
+if rank_comments_orig is not None or rank_comments_norm is not None:
+    ax.legend()
+
+fig.tight_layout()
+
+
+placeholders = ["[URL]", "[EMAIL]", "[USER]", "[MBC20]"]
+
+def _placeholder_counts(sdf) -> pd.Series:
+    if sdf is None:
+        return pd.Series([0] * len(placeholders), index=placeholders, dtype="int64")
+    pdf = (
+        sdf.filter(sdf.word.isin(placeholders))
+        .toPandas()
+        .set_index("word")["count"]
+        if sdf is not None
+        else pd.Series(dtype="int64")
+    )
+    return pdf.reindex(placeholders, fill_value=0)
+
+
+ph_posts = _placeholder_counts(normalized_posts_df)
+ph_comments = _placeholder_counts(normalized_comments_df) if normalized_comments_df is not None else pd.Series(
+    [0] * len(placeholders), index=placeholders, dtype="int64"
 )
 
+ph_df = pd.DataFrame({"Posts": ph_posts, "Comments": ph_comments})
+ax = ph_df.plot.bar(
+    figsize=(10, 5),
+    rot=0,
+    color=["steelblue", "coral"],
+    title="Placeholder Tokens in Normalized Dictionaries",
+    xlabel="Placeholder token",
+    ylabel="Count",
+)
+ax.legend(title="Source")
+ax.figure.tight_layout()
 
-def normalize_series(text: pd.Series) -> pd.Series:
-    """Vectorized: URLs (incl. scheme-less) and other placeholders.
+placeholder_table = ph_df.copy()
+placeholder_table["Total"] = placeholder_table["Posts"] + placeholder_table["Comments"]
+display(placeholder_table.reset_index().rename(columns={"index": "token"}))
 
-    Order matters: ``http(s)`` and ``www`` first, then ``//host``, then ``@`` emails,
-    then bare ``host.tld/…`` (second pass for scheme-less links), then mentions and MBC20.
-    """
-    s = text.fillna("").astype("string")
-    s = s.str.strip()
-    s = s.str.replace(r"\s+", " ", regex=True)
-    s = s.str.replace(_URL_HTTP, "[URL]", regex=True)
-    s = s.str.replace(_URL_WWW, "[URL]", regex=True)
-    s = s.str.replace(_URL_PROTO_REL, "[URL]", regex=True)
-    s = s.str.replace(_EMAIL_RE, "[EMAIL]", regex=True)
-    s = s.str.replace(_URL_BARE, "[URL]", regex=True)
-    s = s.str.replace(r"(?<![\w])@\w+", "[USER]", regex=True)
-    s = s.str.replace(_MBC20_RE, "[MBC20]", regex=True)
-    return s
-
-data = Data().load("clean")
-
-data.posts["normalized"] = normalize_series(data.posts.post)
-# data.posts["post_length"] = data.posts.normalized.str.len()
-# data.posts["word_count"] = data.posts.normalized.str.split().str.len()
-print(f"Normalized dataset ready: {data.posts.shape}")
-
-data.comments["normalized"] = normalize_series(data.comments.content)
-# data.comments["post_length"] = data.comments.normalized.str.len()
-# data.comments["word_count"] = data.comments.normalized.str.split().str.len()
-print(f"Normalized comments ready: {data.comments.shape}")
-```
-
-```{python}
-#| label: preprocess-dictionary
-
-
-def make_dictionary(text: pd.Series) -> pd.DataFrame:
-    """Whitespace-split word counts pooled across all rows (descending by count)."""
-    s = text.fillna("").astype("string")
-    tok = s.str.split().explode()
-    tok = tok[tok.str.len() > 0]
-    return tok.value_counts().rename_axis("word").reset_index(name="count")
-
-
-original_posts_df = make_dictionary(data.posts.post)
-normalized_posts_df = make_dictionary(data.posts.normalized)
-
-original_comments_df = make_dictionary(data.comments.post)
-normalized_comments_df = make_dictionary(data.comments.normalized)
-```
-
-```{python}
-#| label: preprocess-norm-save
-#| message: false
-
-data.save('norm')
+spark.stop()
 ```
