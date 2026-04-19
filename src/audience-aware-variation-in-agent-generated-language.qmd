@@ -65,3 +65,7 @@ Do Moltbook agents adapt their linguistic style when expressing semantically sim
 # Psychographic Profiling of Agents
 
 {{< include _psychographic_profiling.qmd >}}
+
+# Linking Topics to Phychographic Traits
+
+{{< include _topics_psychographics.qmd >}}

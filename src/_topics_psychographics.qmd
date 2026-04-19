@@ -1,0 +1,388 @@
+<!-- Partial: linking topics to psychographic traits. -->
+
+This section operationalizes the outline task **Linking Topics to Psychological Traits**.
+We connect discovered topics/narratives to psychographic signals by:
+
+- identifying agents heavily involved in each topic,
+- averaging their trait/value profiles,
+- estimating topic-to-trait relationships (including significance),
+- surfacing archetypal examples.
+
+```{python}
+#| label: topics-psych-load
+#| message: false
+#| warning: false
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from utils import ROOT
+
+# Topic dataframe from previous section (preferred) or fallback from persisted posts.
+if "_posts" in globals():
+    topic_df = _posts.copy()
+else:
+    topic_df = pd.read_parquet(ROOT / "data" / "posts-norm.parquet")
+
+if "bertopic_id" in topic_df.columns:
+    topic_key = "bertopic_id"
+elif "topic_id" in topic_df.columns:
+    topic_key = "topic_id"
+else:
+    raise RuntimeError("No topic column found (`bertopic_id` or `topic_id`).")
+
+psych_path = ROOT / "data" / "posts-psychographic.parquet"
+if not psych_path.exists():
+    raise FileNotFoundError(f"Missing {psych_path}. Run psychographic profiling first.")
+psych_df = pd.read_parquet(psych_path)
+
+if "agent" not in topic_df.columns:
+    raise RuntimeError("Expected `agent` in topic dataframe.")
+if "agent" not in psych_df.columns:
+    raise RuntimeError("Expected `agent` in posts-psychographic dataframe.")
+
+# Join by post id when available; fallback to positional join after truncation.
+if "post_id" in topic_df.columns and "post_id" in psych_df.columns:
+    link_df = topic_df[["post_id", "agent", "submolt", topic_key]].merge(
+        psych_df, on=["post_id", "agent", "submolt"], how="inner"
+    )
+elif "_orig_index" in topic_df.columns and "post_id" in psych_df.columns:
+    link_df = topic_df[["_orig_index", "agent", "submolt", topic_key]].merge(
+        psych_df,
+        left_on=["_orig_index", "agent", "submolt"],
+        right_on=["post_id", "agent", "submolt"],
+        how="inner",
+    )
+else:
+    n = min(len(topic_df), len(psych_df))
+    tmp_t = topic_df.iloc[:n].copy().reset_index(drop=True)
+    tmp_p = psych_df.iloc[:n].copy().reset_index(drop=True)
+    link_df = pd.concat([tmp_t[[topic_key, "agent", "submolt"]], tmp_p], axis=1)
+
+score_cols = [
+    c
+    for c in link_df.columns
+    if c.startswith("emotion_") or c.startswith("ocean_") or c.startswith("value_")
+]
+if not score_cols:
+    raise RuntimeError("No psychographic score columns found in merged dataset.")
+
+print(f"Link rows: {len(link_df):,} | topic_key={topic_key!r} | score_dims={len(score_cols)}")
+```
+
+```{python}
+#| label: topics-psych-agent-participation
+#| message: false
+#| warning: false
+
+TOPIC_MIN_POSTS = 25
+AGENT_HEAVY_SHARE = 0.20
+
+topic_posts = link_df[link_df[topic_key] != -1].copy()
+topic_sizes = topic_posts[topic_key].value_counts()
+valid_topics = topic_sizes[topic_sizes >= TOPIC_MIN_POSTS].index
+topic_posts = topic_posts[topic_posts[topic_key].isin(valid_topics)].copy()
+
+agent_topic_counts = (
+    topic_posts.groupby(["agent", topic_key], observed=True)
+    .size()
+    .reset_index(name="posts_in_topic")
+)
+agent_total_counts = (
+    topic_posts.groupby("agent", observed=True)
+    .size()
+    .reset_index(name="posts_total")
+)
+
+agent_topic_participation = agent_topic_counts.merge(agent_total_counts, on="agent", how="left")
+agent_topic_participation["share_in_topic"] = (
+    agent_topic_participation["posts_in_topic"] / agent_topic_participation["posts_total"]
+)
+
+heavy_agents = agent_topic_participation[
+    agent_topic_participation["share_in_topic"] >= AGENT_HEAVY_SHARE
+].copy()
+
+print("Heavy-involvement agent-topic pairs (top 20):")
+print(
+    heavy_agents.sort_values("share_in_topic", ascending=False)
+    .head(20)
+    .to_string(index=False)
+)
+```
+
+```{python}
+#| label: topics-psych-topic-profiles
+#| message: false
+#| warning: false
+
+# Topic -> psychographic profile: mean of heavy-involvement agents.
+if heavy_agents.empty:
+    topic_psych_profile_df = pd.DataFrame(columns=[topic_key, "n_heavy_agents", "n_posts"] + score_cols)
+    print("No heavy-involvement agent-topic pairs after filtering; topic profiles are empty.")
+else:
+    topic_profile_rows = []
+    for tid, grp in heavy_agents.groupby(topic_key, observed=True):
+        agents_for_topic = grp["agent"].unique()
+        sub = link_df[link_df["agent"].isin(agents_for_topic)].copy()
+        row = {
+            topic_key: int(tid),
+            "n_heavy_agents": int(len(agents_for_topic)),
+            "n_posts": int((topic_posts[topic_key] == tid).sum()),
+        }
+        for c in score_cols:
+            row[c] = float(sub[c].mean())
+        topic_profile_rows.append(row)
+
+    topic_psych_profile_df = (
+        pd.DataFrame(topic_profile_rows)
+        .sort_values("n_posts", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    print("Topic -> psychographic mean profiles (head):")
+    show_cols = [topic_key, "n_posts", "n_heavy_agents"] + score_cols[:8]
+    print(topic_psych_profile_df[show_cols].head(12).to_string(index=False))
+```
+
+```{python}
+#| label: topics-psych-correlations
+#| message: false
+#| warning: false
+
+# Correlate topic prevalence with psych dimensions across topics.
+if len(topic_psych_profile_df) >= 3:
+    corr_input = topic_psych_profile_df.set_index(topic_key)[score_cols]
+    topic_trait_corr = corr_input.corr(method="spearman")
+else:
+    topic_trait_corr = pd.DataFrame(index=score_cols, columns=score_cols, dtype=float)
+
+print("Psychographic dimension correlation matrix shape:", topic_trait_corr.shape)
+```
+
+```{python}
+#| label: topics-psych-heatmaps
+#| message: false
+#| warning: false
+#| fig-cap: Topic-to-psych profile heatmap and trait-correlation heatmap.
+
+if not topic_psych_profile_df.empty:
+    top_dims = (
+        topic_psych_profile_df[score_cols]
+        .var(axis=0)
+        .sort_values(ascending=False)
+        .head(20)
+        .index
+        .tolist()
+    )
+    heat_topic = topic_psych_profile_df.set_index(topic_key)[top_dims]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    sns.heatmap(heat_topic, cmap="mako", linewidths=0.2, linecolor="white", ax=ax)
+    ax.set(
+        title="Topic x Psychographic Profile (means over heavy-involvement agents)",
+        xlabel="Psychographic dimensions",
+        ylabel=f"{topic_key}",
+    )
+    fig.tight_layout()
+
+if not topic_trait_corr.empty:
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(
+        topic_trait_corr,
+        cmap="coolwarm",
+        center=0.0,
+        vmin=-1,
+        vmax=1,
+        linewidths=0.1,
+        linecolor="white",
+        ax=ax,
+    )
+    ax.set(title="Psychographic Dimension Correlations (across topics)")
+    fig.tight_layout()
+```
+
+```{python}
+#| label: topics-psych-archetypes
+#| message: false
+#| warning: false
+
+# Archetypal narrative examples: top posts for selected dimensions.
+anchor_dims = [d for d in ["value_benevolence", "ocean_openness", "ocean_neuroticism"] if d in score_cols]
+if not anchor_dims:
+    anchor_dims = score_cols[:3]
+
+archetype_rows = []
+for dim in anchor_dims:
+    top_rows = link_df.nlargest(3, dim)
+    for _, r in top_rows.iterrows():
+        archetype_rows.append(
+            {
+                "dimension": dim,
+                topic_key: int(r[topic_key]) if pd.notna(r[topic_key]) else -1,
+                "agent": r["agent"],
+                "submolt": r.get("submolt", "(missing)"),
+                "score": float(r[dim]),
+                "text_excerpt": str(r.get("text", ""))[:180].replace("\n", " "),
+            }
+        )
+
+topic_archetypes_df = pd.DataFrame(archetype_rows)
+print("Archetypal narrative examples:")
+print(topic_archetypes_df.to_string(index=False))
+```
+
+```{python}
+#| label: topics-psych-topic-label-link
+#| message: false
+#| warning: false
+
+# Link numeric topic ids to human-readable labels from Option 2 when available.
+if "topic_info" in globals() and isinstance(topic_info, pd.DataFrame) and "topic_id" in topic_info.columns:
+    label_col = "narrative_label" if "narrative_label" in topic_info.columns else "topic_name" if "topic_name" in topic_info.columns else None
+    if label_col is not None:
+        _label_map = dict(zip(topic_info["topic_id"], topic_info[label_col]))
+    else:
+        _label_map = {}
+else:
+    _label_map = {}
+
+if not topic_psych_profile_df.empty:
+    topic_psych_profile_df["topic_label"] = topic_psych_profile_df[topic_key].map(
+        lambda x: _label_map.get(int(x), f"Topic {int(x)}")
+    )
+    print("Topic labels linked (head):")
+    print(topic_psych_profile_df[[topic_key, "topic_label", "n_posts"]].head(12).to_string(index=False))
+else:
+    print("No topic profiles to label.")
+```
+
+```{python}
+#| label: topics-psych-significance
+#| message: false
+#| warning: false
+
+from scipy.stats import kruskal
+
+def _bh_adjust(pvals: pd.Series) -> pd.Series:
+    p = pvals.astype(float).values
+    n = len(p)
+    order = np.argsort(p)
+    ranked = np.empty(n, dtype=float)
+    prev = 1.0
+    for i in range(n - 1, -1, -1):
+        idx = order[i]
+        rank = i + 1
+        val = min(prev, p[idx] * n / rank)
+        ranked[idx] = val
+        prev = val
+    return pd.Series(ranked, index=pvals.index)
+
+
+sig_rows = []
+if topic_posts.empty:
+    topic_significance_df = pd.DataFrame(columns=["dimension", "n_topics", "kruskal_H", "p_value", "q_value"])
+    print("No topic-post rows available for significance tests.")
+else:
+    topic_levels = sorted(topic_posts[topic_key].unique())
+    for dim in score_cols:
+        groups = [
+            topic_posts.loc[topic_posts[topic_key] == t, dim].dropna().values
+            for t in topic_levels
+        ]
+        groups = [g for g in groups if len(g) >= 5]
+        if len(groups) < 2:
+            continue
+        H, p = kruskal(*groups)
+        sig_rows.append(
+            {
+                "dimension": dim,
+                "n_topics": len(groups),
+                "kruskal_H": float(H),
+                "p_value": float(p),
+            }
+        )
+
+    topic_significance_df = pd.DataFrame(sig_rows)
+    if not topic_significance_df.empty:
+        topic_significance_df["q_value"] = _bh_adjust(topic_significance_df["p_value"])
+        topic_significance_df = topic_significance_df.sort_values(["q_value", "p_value"]).reset_index(drop=True)
+        print("Topic-wise trait significance (Kruskal-Wallis + BH correction):")
+        print(topic_significance_df.head(20).to_string(index=False))
+    else:
+        print("No valid dimensions for significance testing.")
+```
+
+```{python}
+#| label: topics-psych-ranked-statements
+#| message: false
+#| warning: false
+
+rng = np.random.default_rng(42)
+
+def _bootstrap_ci(vals: np.ndarray, n_boot: int = 400, alpha: float = 0.05) -> tuple[float, float]:
+    vals = np.asarray(vals, dtype=float)
+    if len(vals) == 0:
+        return (float("nan"), float("nan"))
+    if len(vals) == 1:
+        v = float(vals[0])
+        return (v, v)
+    boots = []
+    for _ in range(n_boot):
+        s = rng.choice(vals, size=len(vals), replace=True)
+        boots.append(np.mean(s))
+    lo = float(np.quantile(boots, alpha / 2))
+    hi = float(np.quantile(boots, 1 - alpha / 2))
+    return (lo, hi)
+
+
+rank_rows = []
+if not topic_posts.empty:
+    global_means = topic_posts[score_cols].mean()
+
+    # Focus on dimensions that show strongest across-topic signal.
+    if not topic_significance_df.empty:
+        focus_dims = topic_significance_df["dimension"].head(10).tolist()
+    else:
+        focus_dims = (
+            topic_posts[score_cols]
+            .var(axis=0)
+            .sort_values(ascending=False)
+            .head(10)
+            .index
+            .tolist()
+        )
+
+    for tid, grp in topic_posts.groupby(topic_key, observed=True):
+        for dim in focus_dims:
+            vals = grp[dim].dropna().values
+            if len(vals) < 8:
+                continue
+            m = float(np.mean(vals))
+            lo, hi = _bootstrap_ci(vals)
+            delta = m - float(global_means[dim])
+            rank_rows.append(
+                {
+                    topic_key: int(tid),
+                    "topic_label": _label_map.get(int(tid), f"Topic {int(tid)}"),
+                    "dimension": dim,
+                    "n_posts_topic": int(len(grp)),
+                    "mean_score": m,
+                    "delta_vs_corpus": delta,
+                    "ci_low": lo,
+                    "ci_high": hi,
+                }
+            )
+
+topic_trait_ranked_df = pd.DataFrame(rank_rows)
+if not topic_trait_ranked_df.empty:
+    topic_trait_ranked_df = topic_trait_ranked_df.sort_values(
+        "delta_vs_corpus", ascending=False
+    ).reset_index(drop=True)
+    print("Ranked topic-trait statements (highest deltas first):")
+    print(topic_trait_ranked_df.head(25).to_string(index=False))
+else:
+    print("No ranked statements generated (insufficient data after filters).")
+```
