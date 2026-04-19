@@ -1,0 +1,613 @@
+
+<!-- Partial: general Moltbook exploration - included by main manuscript; no YAML front matter. -->
+
+This section provides a structural overview of Moltbook activity and participation:
+
+- submolt-level traffic and concentration,
+- platform growth over time,
+- daily and weekly activity patterns,
+- new versus returning agent dynamics.
+
+
+```{python}
+#| label: eda-load-posts
+#| warning: false
+#| message: false
+
+import pandas as pd
+
+from utils import Data
+
+data = Data().load('clean')
+```
+
+```{python}
+#| label: eda-submolt
+#| echo: true
+#| message: false
+
+top = 20
+
+print(f'Top {top} submolts:', data.posts.submolt.fillna("(NA)").value_counts().head(top))
+```
+
+```{python}
+#| label: eda-text-length-fig
+#| warning: false
+#| fig-cap: Distribution of post text length (characters), raw posts
+#| fig-height: 4
+#| fig-width: 8
+#| message: false
+data.posts.post.astype(str).str.len().plot.hist(
+    bins=60,
+    logy=True,
+    color="steelblue",
+    edgecolor="white",
+    linewidth=0.3,
+    figsize=(8, 4),
+    title="Post text length (raw)",
+    xlabel="Characters (capped for plot)",
+    ylabel="Count",
+)
+```
+
+```{python}
+#| label: eda-submolt-eco-init
+#| echo: true
+#| warning: false
+#| message: false
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from IPython.display import display
+
+sns.set_theme(style="whitegrid", palette="muted")
+plt.rcParams["figure.dpi"] = 120
+
+
+def _bucket_dates_for_barplot(date_series: pd.Series) -> pd.Series:
+    """Normalize resampled date labels for ``Series.plot.bar`` / ``DataFrame.plot.bar``.
+
+    Daily ``resample`` + bar plots can hit pandas' time-series bar path and raise
+    ``ValueError: Must supply freq for datetime value``. Calendar ``date`` objects
+    avoid that while keeping pandas plotting APIs.
+    """
+    if isinstance(date_series.dtype, pd.PeriodDtype):
+        ts = date_series.dt.to_timestamp()
+    else:
+        ts = pd.to_datetime(date_series, errors="coerce")
+    return ts.dt.date
+
+
+
+submolt_stats = (
+    data.posts.groupby("submolt")
+    .agg(num_posts=("post", "count"), num_agents=("agent", "nunique"))
+    .reset_index()
+)
+submolt_stats["avg_posts_per_agent"] = (
+    submolt_stats["num_posts"] / submolt_stats["num_agents"]
+).round(2)
+total_posts = int(submolt_stats["num_posts"].sum())
+submolt_stats["pct_traffic"] = (submolt_stats["num_posts"] / total_posts * 100).round(2)
+submolt_stats = submolt_stats.sort_values("num_posts", ascending=False).reset_index(drop=True)
+
+print("Top 20 submolts by post count:")
+display(submolt_stats.head(20))
+```
+
+```{python}
+#| label: eda-agent-top-submolts-wide
+#| warning: false
+#| message: false
+
+# one row per agent with top-5 submolt/count pairs.
+# Build the long table first so this cell is order-independent.
+agent_submolt_counts = (
+    data.posts.dropna(subset=["agent", "submolt"])
+    .groupby(["agent", "submolt"])
+    .size()
+    .rename("post_count")
+    .reset_index()
+)
+
+top_agents = (
+    agent_submolt_counts.groupby("agent")["post_count"]
+    .sum()
+    .sort_values(ascending=False)
+    .head(20)
+    .index
+)
+
+top_agents_submolts = agent_submolt_counts[agent_submolt_counts["agent"].isin(top_agents)].copy()
+top_agents_submolts["submolt_rank"] = (
+    top_agents_submolts.sort_values(["agent", "post_count"], ascending=[True, False])
+    .groupby("agent")
+    .cumcount()
+    + 1
+)
+top_agents_submolts = (
+    top_agents_submolts[top_agents_submolts["submolt_rank"] <= 5]
+    .sort_values(["agent", "submolt_rank"])
+    .set_index(["agent", "submolt_rank"])[["submolt", "post_count"]]
+)
+
+top_agents_long = top_agents_submolts.reset_index()
+agent_order = {agent: i for i, agent in enumerate(top_agents)}
+top_agents_long["agent_order"] = top_agents_long["agent"].map(agent_order)
+
+submolt_wide = (
+    top_agents_long.pivot(index="agent", columns="submolt_rank", values="submolt")
+    .rename(columns=lambda r: f"top{r}_submolt")
+)
+count_wide = (
+    top_agents_long.pivot(index="agent", columns="submolt_rank", values="post_count")
+    .rename(columns=lambda r: f"top{r}_post_count")
+)
+total_posts_by_agent = (
+    agent_submolt_counts[agent_submolt_counts["agent"].isin(top_agents)]
+    .groupby("agent")["post_count"]
+    .sum()
+    .rename("total_posts")
+)
+
+top_agents_submolts_wide = (
+    pd.concat([total_posts_by_agent, submolt_wide, count_wide], axis=1)
+    .assign(_order=lambda d: d.index.map(agent_order))
+    .sort_values("_order")
+    .drop(columns="_order")
+)
+
+ordered_cols = ["total_posts"]
+for rank in range(1, 6):
+    ordered_cols.extend([f"top{rank}_submolt", f"top{rank}_post_count"])
+top_agents_submolts_wide = top_agents_submolts_wide.reindex(columns=ordered_cols)
+
+print("top 20 most active agents with top 5 submolts and post counts:")
+display(top_agents_submolts_wide)
+```
+
+```{python}
+#| label: eda-agent-top-submolts-stacked-bars
+#| warning: false
+#| fig-cap: 'Top 20 agents: stacked top-5 submolt post counts, with black markers for total posts.'
+#| fig-height: 8
+#| fig-width: 12
+#| message: false
+
+rank_cols = [f"top{rank}_post_count" for rank in range(1, 6)]
+plot_counts = top_agents_submolts_wide[["total_posts"] + rank_cols].copy().fillna(0)
+plot_counts = plot_counts.sort_values("total_posts", ascending=True)
+
+stack_data = plot_counts[rank_cols].copy()
+stack_data.columns = [f"Top {rank}" for rank in range(1, 6)]
+
+ax = stack_data.plot.barh(
+    stacked=True,
+    figsize=(12, 8),
+    colormap="Blues",
+    edgecolor="white",
+    linewidth=0.4,
+    xlabel="Post count",
+    ylabel="Agent",
+    title="Top 20 Agents: Top 5 Submolts (Stacked by Rank)",
+)
+ax.scatter(
+    plot_counts["total_posts"],
+    np.arange(len(plot_counts)) + 0.5,
+    color="black",
+    s=20,
+    label="Total posts",
+    zorder=3,
+)
+ax.legend(title="Within-agent rank", loc="lower right", fontsize=8)
+ax.figure.tight_layout()
+```
+
+```{python}
+#| label: eda-submolt-eco-overview-fig
+#| warning: false
+#| fig-cap: 'Top 20 submolts: posts, unique agents, and average posts per agent.'
+#| message: false
+
+# Plot: Top 20 submolts by post volume (one DataFrame.plot call, subplots=True)
+
+top20 = submolt_stats.head(20).iloc[::-1].set_index("submolt")
+_cols = ["num_posts", "num_agents", "avg_posts_per_agent"]
+_axes = top20[_cols].plot.barh(
+    subplots=True,
+    logx=True,
+    layout=(1, 3),
+    figsize=(18, 6),
+    color=["steelblue", "coral", "mediumseagreen"],
+    legend=False,
+    title=[
+        "Posts per Submolt (Top 20)",
+        "Unique Agents per Submolt (Top 20)",
+        "Avg Posts per Agent (Top 20)",
+    ],
+    xlabel=[
+        "Number of Posts",
+        "Number of Unique Agents",
+        "Avg Posts / Agent",
+    ],
+)
+
+_ax_flat = np.ravel(_axes)
+_fig = _ax_flat[0].figure
+_fig.suptitle("Submolt Ecosystem Overview", fontsize=14, fontweight="bold")
+_fig.tight_layout()
+```
+
+```{python}
+#| label: eda-submolt-eco-pareto
+#| warning: false
+#| fig-cap: Post counts by submolt rank with cumulative share of traffic (Pareto).
+#| message: false
+
+# Traffic distribution (Pareto / cumulative)
+submolt_stats_sorted = submolt_stats.sort_values("num_posts", ascending=False).copy()
+submolt_stats_sorted["cum_pct"] = submolt_stats_sorted["num_posts"].cumsum() / total_posts * 100
+submolt_stats_sorted["rank"] = np.arange(len(submolt_stats_sorted))
+
+ax = submolt_stats_sorted.plot.bar(
+    x="rank",
+    y="num_posts",
+    figsize=(12, 5),
+    color="steelblue",
+    alpha=0.7,
+    legend=False,
+    title="Traffic Distribution Across Submolts (Pareto)",
+    xlabel="Submolt rank",
+    ylabel="Post count",
+)
+ax.yaxis.label.set_color("steelblue")
+
+submolt_stats_sorted["eighty_pct"] = 80.0
+submolt_stats_sorted.plot(
+    x="rank",
+    y="cum_pct",
+    ax=ax,
+    secondary_y=True,
+    color="red",
+    linewidth=2,
+    legend=False,
+)
+submolt_stats_sorted.plot(
+    x="rank",
+    y="eighty_pct",
+    ax=ax,
+    secondary_y=True,
+    color="red",
+    linestyle="--",
+    linewidth=1.5,
+    alpha=0.55,
+    legend=False,
+)
+ax.right_ax.legend(["Cumulative % traffic", "80% line"], loc="center right")
+
+ax.figure.tight_layout()
+
+n80 = (submolt_stats_sorted["cum_pct"] <= 80).sum() + 1
+print(f"Top {n80} submolts account for ~80% of all platform traffic.")
+```
+
+```{python}
+#| label: eda-submolt-eco-gini
+#| warning: false
+#| fig-cap: Lorenz curve for posts across submolts (traffic inequality).
+#| message: false
+
+# Traffic concentration: Gini coefficient + Lorenz curve
+
+
+def gini_coefficient(values):
+    arr = np.sort(np.array(values, dtype=float))
+    n = len(arr)
+    if n == 0 or arr.sum() == 0:
+        return 0.0
+    cumsum = np.cumsum(arr)
+    return (2 * np.sum((np.arange(1, n + 1)) * arr) - (n + 1) * cumsum[-1]) / (n * cumsum[-1])
+
+
+gini = gini_coefficient(submolt_stats["num_posts"].values)
+s_sorted = submolt_stats.sort_values("num_posts", ascending=False)
+cum_pct = s_sorted["num_posts"].cumsum() / submolt_stats["num_posts"].sum() * 100
+n80 = int((cum_pct <= 80).sum()) + 1
+n_submolts_total = len(submolt_stats)
+
+print(f"Gini coefficient (traffic concentration): {gini:.4f}")
+print("  0 = perfectly equal | 1 = extreme concentration")
+print(
+    f"  {n80} of {n_submolts_total} submolts ({n80 / n_submolts_total * 100:.1f}%)"
+    f" account for ~80% of all platform traffic."
+)
+
+arr_sorted = np.sort(submolt_stats["num_posts"].values.astype(float))
+lorenz = np.cumsum(arr_sorted) / arr_sorted.sum()
+lorenz = np.insert(lorenz, 0, 0)
+x_vals = np.linspace(0, 1, len(lorenz))
+
+lorenz_df = pd.DataFrame(
+    {"cum_share_submolt": x_vals, "lorenz": lorenz, "equality_line": x_vals}
+)
+ax = lorenz_df.plot(
+    x="cum_share_submolt",
+    y="lorenz",
+    figsize=(7, 5),
+    color="steelblue",
+    linewidth=2,
+    legend=False,
+    label=f"Lorenz curve (Gini={gini:.3f})",
+    title="Lorenz Curve - Traffic Inequality Across Submolts",
+    xlabel="Cumulative share of submolts",
+    ylabel="Cumulative share of posts",
+)
+lorenz_df.plot(
+    x="cum_share_submolt",
+    y="equality_line",
+    ax=ax,
+    color="gray",
+    linestyle="--",
+    linewidth=1,
+    legend=False,
+    label="Perfect equality",
+)
+ax.legend(ax.get_lines(), [f"Lorenz curve (Gini={gini:.3f})", "Perfect equality"])
+ax.figure.tight_layout()
+```
+
+
+Tracks when submolts were created to understand platform expansion dynamics.
+
+
+```{python}
+#| label: eda-submolt-growth-timeline
+#| warning: false
+#| fig-cap: New submolts per month and cumulative submolts (from submolts table).
+#| message: false
+
+# Submolt creation timeline
+_rs = data.submolts.set_index("created_at")
+
+try:
+    monthly = _rs.resample("ME").size().reset_index()
+except ValueError:
+    monthly = _rs.resample("M").size().reset_index()
+monthly.columns = ["month", "new_submolts"]
+monthly["cumulative"] = monthly["new_submolts"].cumsum()
+_mcol = monthly["month"]
+if pd.api.types.is_period_dtype(_mcol):
+    monthly["month"] = _mcol.dt.to_timestamp()
+else:
+    monthly["month"] = pd.to_datetime(_mcol)
+
+m_idx = monthly.set_index("month")
+ax = m_idx["new_submolts"].plot.bar(
+    figsize=(13, 5),
+    color="steelblue",
+    alpha=0.7,
+    rot=0,
+    legend=False,
+    label="New submolts / month",
+    title="Platform Growth: Submolt Creation Over Time",
+    xlabel="Date",
+    ylabel="New submolts per month",
+)
+ax.yaxis.label.set_color("steelblue")
+m_idx["cumulative"].plot(ax=ax, secondary_y=True, color="red", linewidth=2, legend=False, label="Cumulative submolts")
+ax.right_ax.set_ylabel("Cumulative submolts", color="red")
+h1, l1 = ax.get_legend_handles_labels()
+h2, l2 = ax.right_ax.get_legend_handles_labels()
+ax.legend(h1 + h2, l1 + l2, loc="upper left")
+ax.figure.tight_layout()
+
+print(f"Earliest submolt     : {data.submolts['created_at'].min().date()}")
+print(f"Latest submolt       : {data.submolts['created_at'].max().date()}")
+print(f"Platform age (days)  : {(data.submolts['created_at'].max() - data.submolts['created_at'].min()).days}")
+peak = monthly.loc[monthly["new_submolts"].idxmax()]
+peak_month = pd.Timestamp(peak["month"])
+print(
+    f"Peak creation month  : {peak_month.strftime('%Y-%m')} "
+    f"({int(peak['new_submolts'])} new submolts)"
+)
+```
+
+```{python}
+#| label: eda-submolt-daily-posts
+#| warning: false
+#| fig-cap: Daily post volume from normalized posts.
+#| message: false
+
+daily_posts = (
+    data.posts.dropna(subset=["timestamp"]).set_index("timestamp").resample("D").size().reset_index()
+)
+daily_posts.columns = ["date", "num_posts"]
+daily_posts["date"] = _bucket_dates_for_barplot(daily_posts["date"])
+
+daily_posts.set_index("date")["num_posts"].plot.bar(
+    figsize=(14, 5),
+    color="steelblue",
+    alpha=0.8,
+    width=0.8,
+    legend=False,
+    title="Daily Number of Posts",
+    xlabel="Date",
+    ylabel="Number of Posts",
+).tick_params(axis="x", rotation=45)
+```
+
+```{python}
+#| label: eda-submolt-daily-agents
+#| warning: false
+#| fig-cap: Daily new agents (from agents table).
+#| message: false
+
+daily_agents = (
+    data.agents.dropna(subset=["created_at"]).set_index("created_at").resample("D").size().reset_index()
+)
+daily_agents.columns = ["date", "num_agents"]
+daily_agents["date"] = _bucket_dates_for_barplot(daily_agents["date"])
+
+daily_agents.set_index("date")["num_agents"].plot.bar(
+    figsize=(14, 5),
+    logy=True,
+    color="coral",
+    alpha=0.8,
+    width=0.8,
+    legend=False,
+    title="Daily Creation of Agents",
+    xlabel="Date",
+    ylabel="Number of Agents Created",
+).tick_params(axis="x", rotation=45)
+```
+
+```{python}
+#| label: eda-submolt-daily-submolts-created
+#| warning: false
+#| fig-cap: Daily new submolts (from submolts table).
+#| message: false
+
+daily_submolts = (
+    data.submolts.dropna(subset=["created_at"]).set_index("created_at").resample("D").size().reset_index()
+)
+daily_submolts.columns = ["date", "num_submolts"]
+daily_submolts["date"] = _bucket_dates_for_barplot(daily_submolts["date"])
+
+daily_submolts.set_index("date")["num_submolts"].plot.bar(
+    figsize=(14, 5),
+    color="mediumseagreen",
+    alpha=0.8,
+    width=0.8,
+    legend=False,
+    title="Daily Creation of Submolts",
+    xlabel="Date",
+    ylabel="Number of Submolts Created",
+).tick_params(axis="x", rotation=45)
+```
+
+```{python}
+#| label: eda-submolt-heatmap
+#| warning: false
+#| fig-cap: Posting activity by day of week and hour (UTC).
+#| message: false
+
+df_h = data.posts.dropna(subset=["timestamp"]).copy()
+df_h["hour"] = df_h["timestamp"].dt.hour
+df_h["dow"] = df_h["timestamp"].dt.dayofweek  # 0=Mon, 6=Sun
+
+heatmap = df_h.groupby(["dow", "hour"]).size().unstack(fill_value=0)
+heatmap.index = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+# pandas has no DataFrame heatmap plot; use matplotlib.imshow on the numeric matrix.
+fig, ax = plt.subplots(figsize=(16, 5))
+im = ax.imshow(heatmap.values, aspect="auto", cmap="YlOrRd")
+ax.set_xticks(range(24))
+ax.set_xticklabels([f"{h:02d}:00" for h in range(24)], rotation=45, ha="right", fontsize=8)
+ax.set_yticks(range(7))
+ax.set_yticklabels(heatmap.index)
+fig.colorbar(im, ax=ax, label="Number of Posts")
+ax.set(
+    title="Posting Activity Heatmap (Day x Hour)",
+    xlabel="Hour of Day (UTC)",
+)
+fig.tight_layout()
+```
+
+```{python}
+#| label: eda-submolt-daily-trend
+#| warning: false
+#| fig-cap: Daily posts with 7-day rolling average.
+#| message: false
+
+daily = data.posts.dropna(subset=["timestamp"]).set_index("timestamp").resample("D").size().reset_index()
+daily.columns = ["date", "posts"]
+daily["date"] = _bucket_dates_for_barplot(daily["date"])
+daily["rolling_7d"] = daily["posts"].rolling(7, min_periods=1).mean()
+
+dix = daily.set_index("date")
+ax = dix["posts"].plot.bar(
+    figsize=(14, 5),
+    color="steelblue",
+    alpha=0.4,
+    width=0.8,
+    legend=False,
+    label="Daily posts",
+    title="Daily Post Volume with 7-Day Trend",
+    xlabel="Date",
+    ylabel="Number of Posts",
+)
+dix["rolling_7d"].plot(ax=ax, secondary_y=True, color="steelblue", linewidth=2.5, legend=False, label="7-day rolling avg")
+h1, l1 = ax.get_legend_handles_labels()
+h2, l2 = ax.right_ax.get_legend_handles_labels()
+ax.legend(h1 + h2, l1 + l2)
+ax.tick_params(axis="x", rotation=45)
+```
+
+```{python}
+#| label: eda-submolt-stacked-area
+#| warning: false
+#| fig-cap: Weekly stacked post counts for top submolts vs other.
+#| message: false
+
+# Top submolts traffic share over time (stacked area)
+TOP_N = 8
+top_submolts = data.posts["submolt"].value_counts().head(TOP_N).index.tolist()
+
+df_ta = data.posts.dropna(subset=["timestamp"]).copy()
+df_ta["week"] = df_ta["timestamp"].dt.to_period("W").dt.start_time
+df_ta["submolt_group"] = df_ta["submolt"].where(df_ta["submolt"].isin(top_submolts), other="Other")
+
+weekly = df_ta.groupby(["week", "submolt_group"]).size().unstack(fill_value=0)
+ordered_cols = [s for s in top_submolts if s in weekly.columns] + (
+    ["Other"] if "Other" in weekly.columns else []
+)
+weekly = weekly[ordered_cols]
+
+ax = weekly.plot(
+    kind="area",
+    stacked=True,
+    figsize=(14, 6),
+    colormap="tab10",
+    alpha=0.75,
+    linewidth=0,
+    title=f"Weekly Traffic by Top {TOP_N} Submolts Over Time",
+    xlabel="Week",
+    ylabel="Number of Posts",
+)
+ax.legend(loc="upper left", fontsize=8, ncol=2)
+ax.tick_params(axis="x", rotation=45)
+```
+
+```{python}
+#| label: eda-submolt-new-returning
+#| warning: false
+#| fig-cap: Unique new vs returning agents per week.
+#| message: false
+
+df_nr = data.posts.dropna(subset=["timestamp"]).sort_values("timestamp").copy()
+df_nr["week"] = df_nr["timestamp"].dt.to_period("W").dt.start_time
+
+first_week = df_nr.groupby("agent")["week"].min().rename("first_week")
+df_nr = df_nr.join(first_week, on="agent")
+df_nr["agent_type"] = (df_nr["week"] == df_nr["first_week"]).map({True: "New", False: "Returning"})
+
+weekly_nr = df_nr.groupby(["week", "agent_type"])["agent"].nunique().unstack(fill_value=0)
+weekly_nr = weekly_nr.copy()
+weekly_nr.index = pd.DatetimeIndex(weekly_nr.index).strftime("%Y-%m-%d")
+
+ax = weekly_nr.plot(
+    kind="bar",
+    stacked=True,
+    figsize=(14, 5),
+    color=["#5B9BD5", "#ED7D31"],
+    width=0.8,
+    title="New vs Returning Agents per Week",
+    xlabel="Week",
+    ylabel="Unique Agents",
+)
+ax.legend(["New", "Returning"])
+ax.tick_params(axis="x", rotation=45)
+```

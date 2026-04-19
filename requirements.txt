@@ -19,6 +19,7 @@ sentence-transformers
 tqdm
 twokenize
 umap-learn
+urlextract
 # IDE
 cairosvg
 grip
