@@ -249,7 +249,7 @@ ax.figure.tight_layout()
 #| message: false
 
 from sentence_transformers import SentenceTransformer, util
-import os
+import torch
 
 MODEL_CANDIDATES = [
     "google/embeddinggemma-300m",
@@ -257,11 +257,11 @@ MODEL_CANDIDATES = [
 ]
 
 model = None
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+device = "cuda" if torch.cuda.is_available() else "cpu"
 for model_name in MODEL_CANDIDATES:
     try:
-        model = SentenceTransformer(model_name, device="cpu")
-        print(f"Using embedding model: {model_name} (device=cpu)")
+        model = SentenceTransformer(model_name, device=device)
+        print(f"Using embedding model: {model_name} (device={device})")
         break
     except Exception as exc:
         print(f"Model load failed for {model_name}: {exc}")
