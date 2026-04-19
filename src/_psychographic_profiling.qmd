@@ -1,0 +1,372 @@
+
+<!-- Partial: psychographic profiling of agents. -->
+
+This section implements the outline's **Psychographic Profiling of Agents** task.
+
+- Fine-tune one suggested resource (**GoEmotions**) in a compact training run.
+- Run the resulting model, together with additional suggested pretrained models, on Moltbook posts.
+- Build post-level and agent-level psychographic outputs.
+
+The post-level output explicitly includes identifiers for **agent** and **submolt**, as required by the outline.
+
+```{python}
+#| label: profile-load-data
+#| warning: false
+#| message: false
+
+from os import getenv
+
+import pandas as pd
+from dotenv import load_dotenv
+
+from utils import Data, ROOT
+
+load_dotenv(ROOT / ".env", override=False)
+print(f"HF_TOKEN found: {bool(getenv('HF_TOKEN'))}")
+
+data = Data().load("norm")
+_posts_profile = data.posts.copy()
+
+if _posts_profile is None or _posts_profile.empty:
+    raise ValueError("No posts found in `norm` dataset.")
+if "agent" not in _posts_profile.columns:
+    raise ValueError("Expected `agent` column on posts for profiling.")
+
+text_col = next((c for c in ["normalized", "post_normalized", "post", "content"] if c in _posts_profile.columns), None)
+if text_col is None:
+    raise ValueError("Could not find a text column in posts.")
+
+_posts_profile[text_col] = _posts_profile[text_col].fillna("").astype(str).str.strip()
+_posts_profile = _posts_profile[_posts_profile[text_col].str.len() >= 20].copy()
+
+if "submolt" not in _posts_profile.columns:
+    _posts_profile["submolt"] = "(missing)"
+if "post_id" not in _posts_profile.columns:
+    _posts_profile = _posts_profile.reset_index(drop=False).rename(columns={"index": "post_id"})
+
+print(f"Posts available for psychographic inference: {len(_posts_profile):,}")
+print(f"Text column: {text_col!r}")
+```
+
+```{python}
+#| label: profile-finetune-goemotions
+#| warning: false
+#| message: false
+
+import numpy as np
+import torch
+from datasets import load_dataset
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    Trainer,
+    TrainingArguments,
+)
+
+BASE_MODEL = "distilbert-base-uncased"
+FT_DIR = ROOT / "artifacts" / "goemotions-distilbert"
+FT_DIR.mkdir(parents=True, exist_ok=True)
+
+go = load_dataset("go_emotions", "raw")
+# Support both GoEmotions schemas:
+# - sequence labels column (`labels`)
+# - one-hot emotion columns in `raw` config.
+if "labels" in go["train"].column_names:
+    label_names = go["train"].features["labels"].feature.names
+
+    def _to_single_label(ex):
+        lbs = ex["labels"]
+        ex["label"] = int(lbs[0]) if lbs else -1
+        return ex
+
+    go_train = go["train"].map(_to_single_label).filter(lambda x: x["label"] >= 0)
+    if "validation" in go:
+        go_eval = go["validation"].map(_to_single_label).filter(lambda x: x["label"] >= 0)
+    else:
+        split = go_train.train_test_split(test_size=0.1, seed=42)
+        go_train, go_eval = split["train"], split["test"]
+else:
+    META_COLS = {
+        "text",
+        "id",
+        "author",
+        "subreddit",
+        "link_id",
+        "parent_id",
+        "created_utc",
+        "rater_id",
+        "example_very_unclear",
+    }
+    label_names = [c for c in go["train"].column_names if c not in META_COLS]
+    if not label_names:
+        raise RuntimeError("Could not infer emotion columns from GoEmotions dataset.")
+
+    def _to_single_label(ex):
+        vals = [int(ex.get(k, 0)) for k in label_names]
+        if sum(vals) <= 0:
+            ex["label"] = -1
+        else:
+            ex["label"] = int(np.argmax(vals))
+        return ex
+
+    train_all = go["train"].map(_to_single_label).filter(lambda x: x["label"] >= 0)
+    if "validation" in go:
+        go_eval = go["validation"].map(_to_single_label).filter(lambda x: x["label"] >= 0)
+        go_train = train_all
+    else:
+        split = train_all.train_test_split(test_size=0.1, seed=42)
+        go_train, go_eval = split["train"], split["test"]
+
+MAX_TRAIN = 25_000
+MAX_EVAL = 4_000
+if len(go_train) > MAX_TRAIN:
+    go_train = go_train.shuffle(seed=42).select(range(MAX_TRAIN))
+if len(go_eval) > MAX_EVAL:
+    go_eval = go_eval.shuffle(seed=42).select(range(MAX_EVAL))
+
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
+def _tok(batch):
+    return tokenizer(batch["text"], truncation=True, max_length=160)
+
+go_train = go_train.map(_tok, batched=True)
+go_eval = go_eval.map(_tok, batched=True)
+go_train = go_train.remove_columns([c for c in go_train.column_names if c not in {"input_ids", "attention_mask", "label"}])
+go_eval = go_eval.remove_columns([c for c in go_eval.column_names if c not in {"input_ids", "attention_mask", "label"}])
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    BASE_MODEL,
+    num_labels=len(label_names),
+)
+
+args = TrainingArguments(
+    output_dir=str(FT_DIR),
+    learning_rate=2e-5,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=32,
+    num_train_epochs=1,
+    weight_decay=0.01,
+    eval_strategy="epoch",
+    save_strategy="no",
+    logging_steps=100,
+    report_to="none",
+    seed=42,
+    fp16=torch.cuda.is_available(),
+)
+
+def _metrics(eval_pred):
+    logits, labels = eval_pred
+    preds = np.argmax(logits, axis=1)
+    return {"accuracy": float((preds == labels).mean())}
+
+trainer = Trainer(
+    model=model,
+    args=args,
+    train_dataset=go_train,
+    eval_dataset=go_eval,
+    data_collator=data_collator,
+    compute_metrics=_metrics,
+)
+
+trainer.train()
+print("GoEmotions fine-tune done.")
+trait_labels = label_names
+```
+
+```{python}
+#| label: profile-infer-goemotions
+#| warning: false
+#| message: false
+
+import torch
+
+infer_model = trainer.model.eval()
+device = "cuda" if torch.cuda.is_available() else "cpu"
+infer_model.to(device)
+print(f"Inference device: {device}")
+
+texts = _posts_profile[text_col].tolist()
+BATCH = 64
+
+all_probs = []
+with torch.no_grad():
+    for i in range(0, len(texts), BATCH):
+        batch = texts[i : i + BATCH]
+        enc = tokenizer(
+            batch,
+            truncation=True,
+            padding=True,
+            max_length=192,
+            return_tensors="pt",
+        )
+        enc = {k: v.to(device) for k, v in enc.items()}
+        out = infer_model(**enc).logits
+        probs = torch.softmax(out, dim=1).cpu().numpy()
+        all_probs.append(probs)
+
+probs = np.vstack(all_probs)
+emo_labels = [f"emotion_{lbl.replace('-', '_').replace(' ', '_')}" for lbl in trait_labels]
+goemotion_df = pd.DataFrame(probs, columns=emo_labels, index=_posts_profile.index)
+
+argmax_idx = probs.argmax(axis=1)
+goemotion_df["top_emotion"] = [trait_labels[i] for i in argmax_idx]
+goemotion_df["top_emotion_score"] = probs.max(axis=1)
+
+print("GoEmotions inference complete.")
+```
+
+```{python}
+#| label: profile-infer-ocean
+#| warning: false
+#| message: false
+
+import numpy as np
+from transformers import pipeline
+
+ocean_pipe = pipeline(
+    "text-classification",
+    model="ppp57420/ocean-personality-distilbert",
+    tokenizer="ppp57420/ocean-personality-distilbert",
+    device=0 if torch.cuda.is_available() else -1,
+)
+
+texts = _posts_profile[text_col].tolist()
+BATCH = 64
+ocean_rows = []
+for i in range(0, len(texts), BATCH):
+    outs = ocean_pipe(texts[i : i + BATCH], top_k=None, truncation=True, max_length=192)
+    for item in outs:
+        row = {}
+        for d in item:
+            key = "ocean_" + d["label"].strip().lower().replace(" ", "_")
+            row[key] = float(d["score"])
+        ocean_rows.append(row)
+
+ocean_df = pd.DataFrame(ocean_rows, index=_posts_profile.index).fillna(0.0)
+print("PANDORA/OCEAN inference complete.")
+```
+
+```{python}
+#| label: profile-infer-valuenet
+#| warning: false
+#| message: false
+
+# ValueNet-style Schwartz values model (pretrained adaptation).
+value_pipe = pipeline(
+    "text-classification",
+    model="devnote5676/schwartz-values-classifier",
+    tokenizer="devnote5676/schwartz-values-classifier",
+    device=0 if torch.cuda.is_available() else -1,
+)
+
+value_rows = []
+for i in range(0, len(texts), BATCH):
+    outs = value_pipe(texts[i : i + BATCH], top_k=None, truncation=True, max_length=192)
+    for item in outs:
+        row = {}
+        for d in item:
+            key = "value_" + d["label"].strip().lower().replace(" ", "_")
+            row[key] = float(d["score"])
+        value_rows.append(row)
+
+values_df = pd.DataFrame(value_rows, index=_posts_profile.index).fillna(0.0)
+print("ValueNet-style inference complete.")
+```
+
+```{python}
+#| label: profile-merge-and-aggregate
+#| warning: false
+#| message: false
+
+post_psychographic_df = pd.concat(
+    [
+        _posts_profile[["post_id", "agent", "submolt", text_col]].rename(columns={text_col: "text"}),
+        goemotion_df,
+        ocean_df,
+        values_df,
+    ],
+    axis=1,
+)
+
+score_cols = [
+    c
+    for c in post_psychographic_df.columns
+    if c.startswith("emotion_") or c.startswith("ocean_") or c.startswith("value_")
+]
+
+count_df = post_psychographic_df.groupby("agent", observed=True).size().rename("n_posts")
+mode_submolt = (
+    post_psychographic_df.groupby("agent", observed=True)["submolt"]
+    .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else "(missing)")
+    .rename("dominant_submolt")
+)
+mean_df = post_psychographic_df.groupby("agent", observed=True)[score_cols].mean().add_suffix("_mean")
+var_df = (
+    post_psychographic_df.groupby("agent", observed=True)[score_cols]
+    .var(ddof=0)
+    .fillna(0.0)
+    .add_suffix("_var")
+)
+
+agent_profiles_df = (
+    pd.concat([count_df, mode_submolt, mean_df, var_df], axis=1)
+    .reset_index()
+    .sort_values("n_posts", ascending=False)
+    .reset_index(drop=True)
+)
+
+mean_cols = [c for c in agent_profiles_df.columns if c.endswith("_mean")]
+var_cols = [c for c in agent_profiles_df.columns if c.endswith("_var")]
+agent_profiles_df["trait_profile_mean"] = agent_profiles_df[mean_cols].apply(
+    lambda r: {k.replace("_mean", ""): float(v) for k, v in r.items()},
+    axis=1,
+)
+agent_profiles_df["trait_profile_var"] = agent_profiles_df[var_cols].apply(
+    lambda r: {k.replace("_var", ""): float(v) for k, v in r.items()},
+    axis=1,
+)
+
+print("Agent-level psychographic profiles preview:")
+print(agent_profiles_df.head(10)[["agent", "n_posts", "dominant_submolt", "trait_profile_mean"]].to_string(index=False))
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Heatmap: top agents x top dimensions (means only)
+TOP_AGENTS = 20
+TOP_DIMS = 20
+heat_agents = agent_profiles_df.head(TOP_AGENTS).copy()
+top_dims = (
+    heat_agents[mean_cols]
+    .mean(axis=0)
+    .sort_values(ascending=False)
+    .head(TOP_DIMS)
+    .index
+    .tolist()
+)
+heat_df = heat_agents.set_index("agent")[top_dims].copy()
+heat_df.columns = [c.replace("_mean", "") for c in heat_df.columns]
+
+fig, ax = plt.subplots(figsize=(14, 7))
+sns.heatmap(
+    heat_df,
+    cmap="mako",
+    linewidths=0.2,
+    linecolor="white",
+    ax=ax,
+)
+ax.set(
+    title="Psychographic Profile Heatmap (Top Agents x Top Dimensions)",
+    xlabel="Psychographic dimensions (mean scores)",
+    ylabel="Agent",
+)
+fig.tight_layout()
+
+# Optional outputs for downstream stages
+post_psychographic_df.to_parquet(ROOT / "data" / "posts-psychographic.parquet", index=False)
+agent_profiles_df.to_parquet(ROOT / "data" / "agents-psychographic.parquet", index=False)
+print("Saved: data/posts-psychographic.parquet")
+print("Saved: data/agents-psychographic.parquet")
+```

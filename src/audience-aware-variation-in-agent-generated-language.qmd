@@ -61,3 +61,7 @@ Do Moltbook agents adapt their linguistic style when expressing semantically sim
 # Topic and Narrative Discovery
 
 {{< include _topic_narrative.qmd >}}
+
+# Psychographic Profiling of Agents
+
+{{< include _psychographic_profiling.qmd >}}
