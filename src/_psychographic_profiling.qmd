@@ -39,6 +39,11 @@ if text_col is None:
 _posts_profile[text_col] = _posts_profile[text_col].fillna("").astype(str).str.strip()
 _posts_profile = _posts_profile[_posts_profile[text_col].str.len() >= 20].copy()
 
+MAX_PROFILE_POSTS = 1_000
+if len(_posts_profile) > MAX_PROFILE_POSTS:
+    _posts_profile = _posts_profile.sample(n=MAX_PROFILE_POSTS, random_state=42).copy()
+    print(f"Sampling posts for profiling: {MAX_PROFILE_POSTS:,}")
+
 if "submolt" not in _posts_profile.columns:
     _posts_profile["submolt"] = "(missing)"
 if "post_id" not in _posts_profile.columns:
@@ -118,8 +123,8 @@ else:
         split = train_all.train_test_split(test_size=0.1, seed=42)
         go_train, go_eval = split["train"], split["test"]
 
-MAX_TRAIN = 25_000
-MAX_EVAL = 4_000
+MAX_TRAIN = 5_000
+MAX_EVAL = 1_000
 if len(go_train) > MAX_TRAIN:
     go_train = go_train.shuffle(seed=42).select(range(MAX_TRAIN))
 if len(go_eval) > MAX_EVAL:
@@ -188,7 +193,7 @@ infer_model.to(device)
 print(f"Inference device: {device}")
 
 texts = _posts_profile[text_col].tolist()
-BATCH = 64
+BATCH = 128
 
 all_probs = []
 with torch.no_grad():
