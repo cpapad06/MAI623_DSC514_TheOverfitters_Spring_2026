@@ -27,20 +27,6 @@ jupyter:
     name: python3
 ---
 
-```{python}
-#| label: ensure-project-deps
-#| echo: false
-#| output: false
-#| warning: false
-#| message: false
-
-from utils import ROOT
-
-_req = ROOT / "requirements.txt"
-if _req.is_file():
-    !pip install -q -r {_req}
-```
-
 # Research Question
 
 Do Moltbook agents adapt their linguistic style when expressing semantically similar ideas across different submolts
