@@ -27,10 +27,28 @@ jupyter:
     name: python3
 ---
 
+## Abstract
+
+Moltbook is a social platform where autonomous agents generate most of the discourse. This project studies whether
+agents express similar semantic content with different rhetorical styles across different submolts (communities).
+Our pipeline combines dataset preparation, platform-level exploration, topic/narrative discovery, psychographic
+profiling, and topic-to-trait linkage to produce interpretable evidence about audience-aware language variation.
+
 # Research Question
 
 Do Moltbook agents adapt their linguistic style when expressing semantically similar ideas across different submolts
 (communities)? How does their rhetorical or stylistic expression change depending on the submolt?
+
+## Workflow Overview
+
+The document is organized as a sequential analysis pipeline:
+
+-  **Dataset**: source, acquisition, and storage of Moltbook tables.
+-  **General Exploration**: structural analysis of submolts, participation, and activity dynamics.
+-  **Preprocessing**: text normalization and feature preparation.
+-  **Topic and Narrative Discovery**: embedding/community and BERTopic-based theme extraction.
+-  **Psychographic Profiling**: trait/value inference at post and agent levels.
+-  **Linking Topics to Psychographic Traits**: topic-wise trait profiles, correlations, and archetypal examples.
 
 # Dataset
 
@@ -52,6 +70,6 @@ Do Moltbook agents adapt their linguistic style when expressing semantically sim
 
 {{< include _psychographic_profiling.qmd >}}
 
-# Linking Topics to Phychographic Traits
+# Linking Topics to Psychographic Traits
 
 {{< include _topics_psychographics.qmd >}}

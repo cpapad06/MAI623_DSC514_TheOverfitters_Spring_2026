@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <style>
+      .box { fill:#f5f7fb; stroke:#294172; stroke-width:2; rx:10; ry:10; }
+      .title { font: 700 18px Arial, sans-serif; fill:#14233f; }
+      .txt { font: 14px Arial, sans-serif; fill:#1f2f4a; }
+      .arrow { stroke:#294172; stroke-width:2.5; fill:none; marker-end:url(#m); }
+    </style>
+    <marker id="m" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#294172"/>
+    </marker>
+  </defs>
+
+  <text x="28" y="36" class="title">Rhetorical Mirrors Pipeline Overview</text>
+
+  <rect x="30" y="70" width="200" height="120" class="box"/>
+  <text x="45" y="100" class="title">1. Data</text>
+  <text x="45" y="126" class="txt">- posts / comments</text>
+  <text x="45" y="148" class="txt">- agents / submolts</text>
+  <text x="45" y="170" class="txt">- parquet archives</text>
+
+  <rect x="270" y="70" width="220" height="120" class="box"/>
+  <text x="286" y="100" class="title">2. Preprocessing</text>
+  <text x="286" y="126" class="txt">- normalize text</text>
+  <text x="286" y="148" class="txt">- token stats / BoW</text>
+  <text x="286" y="170" class="txt">- clean modeling inputs</text>
+
+  <rect x="530" y="70" width="250" height="120" class="box"/>
+  <text x="548" y="100" class="title">3. Topic Discovery</text>
+  <text x="548" y="126" class="txt">- embedding communities</text>
+  <text x="548" y="148" class="txt">- BERTopic themes</text>
+  <text x="548" y="170" class="txt">- agent x topic matrix</text>
+
+  <rect x="820" y="70" width="330" height="120" class="box"/>
+  <text x="838" y="100" class="title">4. Psychographic Profiling</text>
+  <text x="838" y="126" class="txt">- GoEmotions fine-tune + inference</text>
+  <text x="838" y="148" class="txt">- OCEAN + Schwartz values models</text>
+  <text x="838" y="170" class="txt">- post and agent profile tables</text>
+
+  <rect x="350" y="250" width="500" height="130" class="box"/>
+  <text x="370" y="285" class="title">5. Topic ” Trait Linking</text>
+  <text x="370" y="312" class="txt">- topic-level trait means (heavy-involvement agents)</text>
+  <text x="370" y="334" class="txt">- significance tests, correlations, heatmaps</text>
+  <text x="370" y="356" class="txt">- archetypal narrative examples</text>
+
+  <path d="M230,130 L270,130" class="arrow"/>
+  <path d="M490,130 L530,130" class="arrow"/>
+  <path d="M780,130 L820,130" class="arrow"/>
+  <path d="M985,190 L700,250" class="arrow"/>
+  <path d="M655,190 L600,250" class="arrow"/>
+</svg>

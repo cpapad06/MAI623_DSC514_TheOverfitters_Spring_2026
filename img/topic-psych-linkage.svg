@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="420" viewBox="0 0 1100 420">
+  <defs>
+    <style>
+      .box { fill:#f8f5ff; stroke:#4a2f7a; stroke-width:2; rx:10; ry:10; }
+      .title { font: 700 18px Arial, sans-serif; fill:#2b1650; }
+      .txt { font: 14px Arial, sans-serif; fill:#38245f; }
+      .arrow { stroke:#4a2f7a; stroke-width:2.5; fill:none; marker-end:url(#m2); }
+    </style>
+    <marker id="m2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#4a2f7a"/>
+    </marker>
+  </defs>
+
+  <text x="24" y="36" class="title">Topic-to-Psychographic Linking Logic</text>
+
+  <rect x="30" y="70" width="230" height="120" class="box"/>
+  <text x="48" y="100" class="title">Topic assignments</text>
+  <text x="48" y="126" class="txt">- topic_id / bertopic_id</text>
+  <text x="48" y="148" class="txt">- post -> agent mapping</text>
+  <text x="48" y="170" class="txt">- submolt context</text>
+
+  <rect x="305" y="70" width="250" height="120" class="box"/>
+  <text x="322" y="100" class="title">Psychographic scores</text>
+  <text x="322" y="126" class="txt">- emotions</text>
+  <text x="322" y="148" class="txt">- OCEAN traits</text>
+  <text x="322" y="170" class="txt">- Schwartz values</text>
+
+  <rect x="600" y="70" width="220" height="120" class="box"/>
+  <text x="618" y="100" class="title">Join on posts</text>
+  <text x="618" y="126" class="txt">topic + agent + submolt</text>
+  <text x="618" y="148" class="txt">+ psychographic features</text>
+
+  <rect x="860" y="70" width="210" height="120" class="box"/>
+  <text x="878" y="100" class="title">Heavy involvement</text>
+  <text x="878" y="126" class="txt">select agents with</text>
+  <text x="878" y="148" class="txt">high topic participation</text>
+
+  <rect x="210" y="245" width="690" height="145" class="box"/>
+  <text x="230" y="278" class="title">Outputs</text>
+  <text x="230" y="304" class="txt">1) Topic-level mean trait/value profiles</text>
+  <text x="230" y="326" class="txt">2) Topic-trait significance + corrected p-values</text>
+  <text x="230" y="348" class="txt">3) Correlation heatmaps and ranked topic-trait statements (with CI)</text>
+  <text x="230" y="370" class="txt">4) Archetypal examples (agent, submolt, excerpt)</text>
+
+  <path d="M260,130 L305,130" class="arrow"/>
+  <path d="M555,130 L600,130" class="arrow"/>
+  <path d="M820,130 L860,130" class="arrow"/>
+  <path d="M965,190 L760,245" class="arrow"/>
+  <path d="M710,190 L610,245" class="arrow"/>
+  <path d="M145,190 L350,245" class="arrow"/>
+</svg>
