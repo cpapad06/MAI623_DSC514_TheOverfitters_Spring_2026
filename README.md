@@ -261,7 +261,7 @@ BERTopic is used as the primary method, with community detection providing compl
 | Community Detection coverage | 38.5% |
 | BERTopic coverage | 100% |
 
-
+---
 ### Psychographic profiling
 
 - Fine-tune GoEmotions classifier (compact training run).
