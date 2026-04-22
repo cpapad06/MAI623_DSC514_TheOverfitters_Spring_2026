@@ -1,4 +1,3 @@
-
 <!-- Partial: text normalization and lexical summaries. -->
 
 ## Text Normalization
@@ -15,12 +14,28 @@ This stage runs in **Apache Spark** (local mode): read Parquet -> normalize -> d
 Parquet outputs. A **Java 8+** runtime must be available on `PATH`. On smaller machines, JVM startup overhead can be
 noticeable; Spark becomes more beneficial as data size grows.
 
+## Operation Order
+
+The pipeline applies the following order of operations:
+
+1. Load data, first trying `*-norm.parquet` to resume from existing normalized text.
+2. If normalized tables are not available, load `*-clean.parquet` and create `normalized` text:
+   URL/email/mention/mbc20 replacement + whitespace collapse.
+3. Build original and normalized dictionaries (posts/comments).
+4. Build `preprocessed` text from `normalized`:
+   uncontract -> remove quoted lines (`>`/`|>`) -> lowercase -> remove punctuation/digit-only tokens -> remove stopwords.
+5. Build preprocessed dictionaries.
+6. From preprocessed text, build stemmed dictionaries and lemmatized dictionaries (separate branches).
+7. Save row-level tables (`norm`, `preprocessed`) and dictionary tables (`norm-bow`, `preprocessed-bow`,
+   `preprocessed-stemmed-bow`, `preprocessed-lemmatized-bow`).
+
 ```{python}
 #| label: preprocess-spark-pipeline
 #| message: false
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.types import StringType
 
 from utils import SparkData, DATA_DIR
 
@@ -58,52 +73,122 @@ def make_dictionary_spark(sdf: DataFrame, text_col: str) -> DataFrame:
     return words.groupBy("word").count().orderBy(F.desc("count"), F.col("word"))
 
 
-def _save_bow(sdf: DataFrame, name: str) -> None:
-    p = DATA_DIR / f"{name}-bow.parquet"
-    sdf.coalesce(1).write.mode("overwrite").parquet(str(p))
-    print("Saved:", p)
+def _uncontract_text(text: str) -> str:
+    text = re.sub(
+        r"(\b)([Aa]re|[Cc]ould|[Dd]id|[Dd]oes|[Dd]o|[Hh]ad|[Hh]as|[Hh]ave|[Ii]s|[Mm]ight|[Mm]ust|[Ss]hould|[Ww]ere|[Ww]ould)n't",
+        r"\1\2 not",
+        text,
+    )
+    text = re.sub(r"(\b)([Hh]e|[Ii]|[Ss]he|[Tt]hey|[Ww]e|[Ww]hat|[Ww]ho|[Yy]ou)'ll", r"\1\2 will", text)
+    text = re.sub(r"(\b)([Tt]hey|[Ww]e|[Ww]hat|[Ww]ho|[Yy]ou)'re", r"\1\2 are", text)
+    text = re.sub(r"(\b)([Ii]|[Ss]hould|[Tt]hey|[Ww]e|[Ww]hat|[Ww]ho|[Ww]ould|[Yy]ou)'ve", r"\1\2 have", text)
+    text = re.sub(r"(\b)([Cc]a)n't", r"\1\2n not", text)
+    text = re.sub(r"(\b)([Ii])'m", r"\1\2 am", text)
+    text = re.sub(r"(\b)([Ll]et)'s", r"\1\2 us", text)
+    text = re.sub(r"(\b)([Tt]here)'s", r"\1\2 is", text)
+    text = re.sub(r"(\b)([Ww])on't", r"\1\2ill not", text)
+    text = re.sub(r"(\b)([Ss])han't", r"\1\2hall not", text)
+    text = re.sub(r"(\b)([Yy])(?:'all|a'll)", r"\1\2ou all", text)
+    return text
+
+
+def _is_punct_or_digit_token(token: str) -> bool:
+    return bool(token) and all(ch.isdigit() or ch in string.punctuation for ch in token)
+
+
+def _preprocess_text(text: str | None) -> str:
+    if text is None:
+        return ""
+    x = str(text)
+    x = _uncontract_text(x)
+    x = re.sub(r"^>.*(?:\n|$)|\|>.*(?:\n|$)", "", x, flags=re.MULTILINE)
+    x = x.lower()
+    tokens = [t for t in re.split(r"\s+", x.strip()) if t]
+    tokens = [t for t in tokens if not _is_punct_or_digit_token(t)]
+    tokens = [t for t in tokens if t not in _STOPWORDS]
+    return " ".join(tokens)
+
+
+def _stem_text(text: str | None) -> str:
+    if text is None:
+        return ""
+    tokens = [t for t in str(text).split() if t]
+    return " ".join(_STEMMER.stem(t) for t in tokens)
+
+
+def _lemmatize_text(text: str | None) -> str:
+    if text is None:
+        return ""
+    tokens = [t for t in str(text).split() if t]
+    return " ".join(_LEMMATIZER.lemmatize(t) for t in tokens)
 
 
 spark = (
     SparkSession.builder.appName("moltbook-preprocess")
-    .master("local[*]")
+    .master("local[4]")
     .config("spark.driver.memory", "4g")
     .config("spark.executor.memory", "4g")
     .config("spark.sql.execution.arrow.pyspark.enabled", "true")
     .config("spark.sql.legacy.parquet.nanosAsLong", "true")
     .config("spark.sql.parquet.enableVectorizedReader", "false")
     .config("spark.hadoop.parquet.read.vectored.io.enabled", "false")
-    .config("spark.sql.files.maxPartitionBytes", str(64 * 1024 * 1024))
+    .config("spark.sql.files.maxPartitionBytes", str(16 * 1024 * 1024))
     .config("spark.sql.shuffle.partitions", "8")
     .config("spark.ui.showConsoleProgress", "false")
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
 
-data = SparkData(spark).load("clean")
+import re
+import string
+
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer, WordNetLemmatizer
+
+nltk.download("wordnet", quiet=True)
+nltk.download("omw-1.4", quiet=True)
+nltk.download("stopwords", quiet=True)
+_STEMMER = PorterStemmer()
+_LEMMATIZER = WordNetLemmatizer()
+_STOPWORDS = set(stopwords.words("english"))
+
+preprocess_udf = F.udf(_preprocess_text, StringType())
+stem_udf = F.udf(_stem_text, StringType())
+lemma_udf = F.udf(_lemmatize_text, StringType())
+
+def _has_column(sdf: DataFrame | None, col: str) -> bool:
+    return sdf is not None and col in sdf.columns
+
+
+data = SparkData(spark).load("norm")
 posts = data.posts
-if posts is None:
-    raise FileNotFoundError(f"Missing posts-clean.parquet under {DATA_DIR}")
-
-posts = (
-    posts.withColumn("normalized", _normalize_spark_column(F.col("post")))
-    .withColumn("post_length", F.length(F.col("normalized")))
-    .withColumn("word_count", _word_count_col(F.col("normalized")))
-)
-posts = posts.persist()
-print(f"Normalized posts: {posts.count()} rows")
-data.posts = posts
-
 comments = data.comments
-if comments is not None:
-    comments = (
-        comments.withColumn("normalized", _normalize_spark_column(F.col("content")))
+
+if _has_column(posts, "normalized") and (comments is None or _has_column(comments, "normalized")):
+    print("Loaded existing normalized parquet (resume mode).")
+else:
+    print("Normalized parquet missing/incomplete; rebuilding from clean tables.")
+    data = SparkData(spark).load("clean")
+    posts = data.posts
+    posts = (
+        posts.withColumn("normalized", _normalize_spark_column(F.col("post")))
         .withColumn("post_length", F.length(F.col("normalized")))
         .withColumn("word_count", _word_count_col(F.col("normalized")))
     )
-    comments = comments.persist()
-    print(f"Normalized comments: {comments.count()} rows")
-data.comments = comments
+    print("Prepared normalized posts column")
+    data.posts = posts
+
+    comments = data.comments
+    if comments is not None:
+        comments = (
+            comments.withColumn("normalized", _normalize_spark_column(F.col("content")))
+            .withColumn("post_length", F.length(F.col("normalized")))
+            .withColumn("word_count", _word_count_col(F.col("normalized")))
+        )
+        print("Prepared normalized comments column")
+    data.comments = comments
+    data.save("norm")
 
 original_posts_df = make_dictionary_spark(posts, "post")
 normalized_posts_df = make_dictionary_spark(posts, "normalized")
@@ -115,10 +200,82 @@ else:
     original_comments_df = None
     normalized_comments_df = None
 
-data.save("norm")
-_save_bow(normalized_posts_df, "posts")
-if normalized_comments_df is not None:
-    _save_bow(normalized_comments_df, "comments")
+posts_preprocessed = (
+    posts.withColumn("preprocessed", preprocess_udf(F.col("normalized")))
+    .withColumn("preprocessed_word_count", _word_count_col(F.col("preprocessed")))
+)
+print("Prepared posts preprocessed column")
+
+if comments is not None:
+    comments_preprocessed = (
+        comments.withColumn("preprocessed", preprocess_udf(F.col("normalized")))
+        .withColumn("preprocessed_word_count", _word_count_col(F.col("preprocessed")))
+    )
+    print("Prepared comments preprocessed column")
+else:
+    comments_preprocessed = None
+
+preprocessed_posts_df = make_dictionary_spark(posts_preprocessed, "preprocessed")
+preprocessed_comments_df = (
+    make_dictionary_spark(comments_preprocessed, "preprocessed")
+    if comments_preprocessed is not None
+    else None
+)
+
+stemmed_posts_df = make_dictionary_spark(
+    posts_preprocessed.withColumn("preprocessed_stemmed", stem_udf(F.col("preprocessed"))),
+    "preprocessed_stemmed",
+)
+stemmed_comments_df = (
+    make_dictionary_spark(
+        comments_preprocessed.withColumn("preprocessed_stemmed", stem_udf(F.col("preprocessed"))),
+        "preprocessed_stemmed",
+    )
+    if comments_preprocessed is not None
+    else None
+)
+
+lemmatized_posts_df = make_dictionary_spark(
+    posts_preprocessed.withColumn("preprocessed_lemmatized", lemma_udf(F.col("preprocessed"))),
+    "preprocessed_lemmatized",
+)
+lemmatized_comments_df = (
+    make_dictionary_spark(
+        comments_preprocessed.withColumn("preprocessed_lemmatized", lemma_udf(F.col("preprocessed"))),
+        "preprocessed_lemmatized",
+    )
+    if comments_preprocessed is not None
+    else None
+)
+
+data_preprocessed = SparkData(spark, agents=data.agents, submolts=data.submolts)
+data_preprocessed.posts = posts_preprocessed
+data_preprocessed.comments = comments_preprocessed
+data_preprocessed.save("preprocessed")
+
+SparkData(
+    spark,
+    posts=normalized_posts_df,
+    comments=normalized_comments_df,
+).save("norm-bow")
+
+SparkData(
+    spark,
+    posts=preprocessed_posts_df,
+    comments=preprocessed_comments_df,
+).save("preprocessed-bow")
+
+SparkData(
+    spark,
+    posts=stemmed_posts_df,
+    comments=stemmed_comments_df,
+).save("preprocessed-stemmed-bow")
+
+SparkData(
+    spark,
+    posts=lemmatized_posts_df,
+    comments=lemmatized_comments_df,
+).save("preprocessed-lemmatized-bow")
 ```
 
 ```{python}
@@ -214,6 +371,71 @@ ax.figure.tight_layout()
 placeholder_table = ph_df.copy()
 placeholder_table["Total"] = placeholder_table["Posts"] + placeholder_table["Comments"]
 display(placeholder_table.reset_index().rename(columns={"index": "token"}))
+```
+
+The post dictionary rank-frequency curve follows a heavy-tailed (Zipf-like) pattern: a small set of very frequent
+tokens dominates, while most tokens appear relatively rarely. Comparing original vs normalized posts shows how
+normalization consolidates noisy lexical variants into shared placeholders such as `[URL]` and `[USER]`.
+
+```{python}
+#| label: preprocess-normalized-wordclouds
+#| warning: false
+#| fig-cap: Wordclouds of preprocessed dictionaries for posts and comments.
+#| message: false
+
+from wordcloud import WordCloud
+
+
+def _to_freq_dict(sdf, top_n: int = 5000) -> dict[str, int]:
+    if sdf is None:
+        return {}
+    pdf = sdf.select("word", "count").limit(top_n).toPandas()
+    return dict(zip(pdf["word"], pdf["count"].astype(int)))
+
+
+posts_freq = _to_freq_dict(preprocessed_posts_df)
+comments_freq = _to_freq_dict(preprocessed_comments_df) if preprocessed_comments_df is not None else {}
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+if posts_freq:
+    wc_posts = WordCloud(width=900, height=500, background_color="white", colormap="Blues").generate_from_frequencies(posts_freq)
+    axes[0].imshow(wc_posts, interpolation="bilinear")
+axes[0].set(title="Preprocessed Posts Dictionary Wordcloud")
+axes[0].axis("off")
+
+if comments_freq:
+    wc_comments = WordCloud(width=900, height=500, background_color="white", colormap="Oranges").generate_from_frequencies(comments_freq)
+    axes[1].imshow(wc_comments, interpolation="bilinear")
+axes[1].set(title="Preprocessed Comments Dictionary Wordcloud")
+axes[1].axis("off")
+
+fig.tight_layout()
+```
+
+```{python}
+#| label: preprocess-normalized-top-bottom-tables
+#| warning: false
+#| message: false
+
+def _display_top_bottom_tokens(sdf, label: str) -> None:
+    if sdf is None:
+        return
+    top = sdf.orderBy(F.desc("count"), F.asc("word")).limit(10).toPandas()
+    bottom = sdf.orderBy(F.asc("count"), F.asc("word")).limit(10).toPandas()
+    print(f"{label} - Top 10 tokens")
+    display(top)
+    print(f"{label} - Bottom 10 tokens")
+    display(bottom)
+
+
+_display_top_bottom_tokens(preprocessed_posts_df, "Preprocessed posts dictionary")
+_display_top_bottom_tokens(preprocessed_comments_df, "Preprocessed comments dictionary")
+```
+
+```{python}
+#| label: preprocess-spark-stop
+#| message: false
 
 spark.stop()
 ```
