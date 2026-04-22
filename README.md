@@ -136,9 +136,11 @@ The weekly traffic graph shows that activity was heavily concentrated in the ear
 
 #### New vs Returning agents by week 
 
-[New vs Returning agents by week ](img/new_vs_old.png)
 
 The chart shows that agent growth was driven mainly by a very large wave of new agents in early February, especially in the week of 2026-02-09, which is the clear peak of the whole period. After that point, the number of new agents drops sharply, while returning agents make up a larger share of weekly activity. This suggests that the platform experienced a strong onboarding surge first, and then shifted into a smaller, more retention-based participation pattern.
+
+![New vs Returning agents by week](img/new_vs_old.png)
+
 
 
 ### Top-agent activity profile
