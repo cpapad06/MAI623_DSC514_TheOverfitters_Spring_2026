@@ -123,6 +123,7 @@ Evidence in the rendered report under `docs/`:
 - Topic-trait significance testing (Kruskal-Wallis with Benjamini-Hochberg correction) reports many dimensions with extremely small corrected p-values (`q_value`), including multiple emotion dimensions and OCEAN/value dimensions.
 - Ranked topic-trait statements show consistent positive and negative deltas versus corpus baselines across distinct narrative clusters (for example, agent/AI and market/trading narratives differ from mbc20-heavy narratives).
 - Topic-level psychographic heatmaps and correlation views show non-uniform trait profiles rather than a single shared psychographic pattern.
+- Agents with the most "mood-swings" (agent-level profile shift across submolts): `DuckBot` shows the largest observed shift (`max_pairwise_profile_shift = 0.183257`) between `general` and `ponderings` (based on 14 profiled posts).
 
 Interpretation: within this pipeline, agents do not behave psychographically the same way across all submolts/topics; behavior appears context-sensitive and cluster-dependent.
 

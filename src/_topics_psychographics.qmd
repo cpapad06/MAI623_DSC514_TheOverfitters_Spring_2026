@@ -26,10 +26,25 @@ if "_posts" in globals():
 else:
     topic_df = pd.read_parquet(ROOT / "data" / "posts-norm.parquet")
 
+if "submolt" not in topic_df.columns:
+    topic_df["submolt"] = "(missing)"
+
+_topic_fallback_label_map = {}
 if "bertopic_id" in topic_df.columns:
     topic_key = "bertopic_id"
 elif "topic_id" in topic_df.columns:
     topic_key = "topic_id"
+elif "submolt" in topic_df.columns:
+    # Standalone fallback: derive stable numeric topic ids from submolts.
+    _submolt_labels = topic_df["submolt"].fillna("(missing)").astype(str)
+    _submolt_cat = pd.Categorical(_submolt_labels)
+    topic_df = topic_df.copy()
+    topic_df["topic_id"] = _submolt_cat.codes.astype(int)
+    topic_key = "topic_id"
+    _topic_fallback_label_map = {
+        int(i): str(lbl) for i, lbl in enumerate(_submolt_cat.categories.tolist())
+    }
+    print("No explicit topic ids found; using submolt-derived topic_id fallback.")
 else:
     raise RuntimeError("No topic column found (`bertopic_id` or `topic_id`).")
 
@@ -61,6 +76,9 @@ else:
     tmp_p = psych_df.iloc[:n].copy().reset_index(drop=True)
     link_df = pd.concat([tmp_t[[topic_key, "agent", "submolt"]], tmp_p], axis=1)
 
+# Guard against duplicate columns (can happen in positional fallback).
+link_df = link_df.loc[:, ~link_df.columns.duplicated()]
+
 score_cols = [
     c
     for c in link_df.columns
@@ -70,6 +88,90 @@ if not score_cols:
     raise RuntimeError("No psychographic score columns found in merged dataset.")
 
 print(f"Link rows: {len(link_df):,} | topic_key={topic_key!r} | score_dims={len(score_cols)}")
+```
+
+```{python}
+#| label: topics-psych-agent-mood-swings
+#| message: false
+#| warning: false
+
+# "Mood swing" = how much an agent's psychographic profile changes across submolts.
+MIN_SUBMOLTS_PER_AGENT = 2
+MIN_POSTS_PER_SUBMOLT = 5
+TOP_SWING_AGENTS = 15
+
+agent_submolt_counts = (
+    link_df.groupby(["agent", "submolt"], observed=True)
+    .size()
+    .reset_index(name="n_posts_submolt")
+)
+
+eligible_pairs = agent_submolt_counts[
+    agent_submolt_counts["n_posts_submolt"] >= MIN_POSTS_PER_SUBMOLT
+].copy()
+
+eligible_link = link_df.merge(
+    eligible_pairs[["agent", "submolt"]],
+    on=["agent", "submolt"],
+    how="inner",
+)
+
+agent_submolt_profiles = (
+    eligible_link.groupby(["agent", "submolt"], observed=True)[score_cols]
+    .mean()
+    .reset_index()
+)
+
+swing_rows = []
+for agent, grp in agent_submolt_profiles.groupby("agent", observed=True):
+    if grp["submolt"].nunique() < MIN_SUBMOLTS_PER_AGENT:
+        continue
+
+    mat = grp[score_cols].to_numpy(dtype=float)
+    submolts = grp["submolt"].tolist()
+    max_dist = -1.0
+    max_pair = ("", "")
+    pair_dists = []
+
+    for i in range(len(mat)):
+        for j in range(i + 1, len(mat)):
+            d = float(np.linalg.norm(mat[i] - mat[j]))
+            pair_dists.append(d)
+            if d > max_dist:
+                max_dist = d
+                max_pair = (str(submolts[i]), str(submolts[j]))
+
+    swing_rows.append(
+        {
+            "agent": agent,
+            "n_submolts_profiled": int(len(mat)),
+            "total_posts_profiled": int(
+                eligible_pairs.loc[eligible_pairs["agent"] == agent, "n_posts_submolt"].sum()
+            ),
+            "mean_pairwise_profile_shift": float(np.mean(pair_dists)),
+            "max_pairwise_profile_shift": float(max_dist),
+            "max_shift_submolt_a": max_pair[0],
+            "max_shift_submolt_b": max_pair[1],
+        }
+    )
+
+agent_mood_swings_df = pd.DataFrame(swing_rows)
+if agent_mood_swings_df.empty:
+    print("No agents met the minimum submolt/post thresholds for mood-swing analysis.")
+else:
+    agent_mood_swings_df = (
+        agent_mood_swings_df
+        .sort_values(
+            ["max_pairwise_profile_shift", "mean_pairwise_profile_shift", "total_posts_profiled"],
+            ascending=[False, False, False],
+        )
+        .reset_index(drop=True)
+    )
+
+    print("Agents with largest psychographic shifts across submolts:")
+    print(
+        agent_mood_swings_df.head(TOP_SWING_AGENTS).to_string(index=False)
+    )
 ```
 
 ```{python}
@@ -247,7 +349,7 @@ if "topic_info" in globals() and isinstance(topic_info, pd.DataFrame) and "topic
     else:
         _label_map = {}
 else:
-    _label_map = {}
+    _label_map = _topic_fallback_label_map.copy()
 
 if not topic_psych_profile_df.empty:
     topic_psych_profile_df["topic_label"] = topic_psych_profile_df[topic_key].map(
