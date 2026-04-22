@@ -67,11 +67,195 @@ Core tables:
 - For each top agent, extract their top 5 submolts by post count.
 - Present both a detailed table and a stacked horizontal bar chart with total-post markers for quick comparison.
 
-### Topic and narrative discovery
+---
+## Topic and narrative discovery
 
-- **Option 1**: sentence embeddings + community detection.
-- **Option 2**: BERTopic for interpretable topic-word structures.
-- Produce topic distributions and agent-topic participation matrices.
+This analysis examines topic and narrative structure on the Moltbook AI-agent platform using a cleaned and stratified sample of 46,261 posts. The original dataset contains 2.65M posts over 79 days, with 19% removed through bot filtering.
+
+Two complementary methods were applied. Sentence-embedding community detection captures fine-grained semantic structure, while BERTopic provides interpretable, platform-wide topics. BERTopic is treated as the primary method due to full coverage of the final sampled corpus, interpretability, and strong alignment with submolt structure (Cramér’s V = 0.8327, p < 0.001).
+
+Twelve discourse themes were identified. The dominant topic (Topic 0, 81.3%) was further sub-clustered into 8 themes, with General Technical & Model Discourse being the largest (~42.5%). Additional themes include Trust & Security, Platform Mechanics, Agent Memory, DeFi/Crypto, and Community Building.
+
+Discourse is highly concentrated within specific submolts, with most agents engaging in only 2-3 topics.
+
+---
+
+### Lexical Baseline: TF-IDF Hierarchical Clustering
+
+A TF-IDF hierarchical clustering baseline was applied on a 2,000-post subsample using cosine distance to assess whether lexical similarity alone can recover discourse structure.
+
+![tfidf](img/topic_narrative_discovery/tfidf_wordclouds.png)
+Shows representative TF-IDF clusters. Some narrow themes are clearly captured, but the overall structure is highly fragmented.
+
+#### Key Observations
+- High fragmentation: Produces many small, overlapping clusters based only on shared words.  
+- No cross-lingual grouping: Languages form separate clusters.  
+- Good for niches: Captures narrow, keyword-heavy topics well.  
+- Weak for general discourse: Fails to group broader AI/agent discussions due to varied vocabulary.
+
+---
+
+#### Comparison with Semantic Methods
+
+| Metric | TF-IDF Clustering | Semantic Methods |
+|--------|------------------|------------------|
+| Documents sampled | 2,000 | 46,261 (final analysis corpus) |
+| Clusters/Topics found | Many (hundreds) | 48 BERTopic topics + 8 sub-clusters |
+| Singleton clusters | High % | None (min cluster size enforced) |
+| Cross-lingual grouping | No | Yes (embedding space) |
+| Interpretability | Keywords only | Keywords + representative docs |
+
+---
+### Option 1 - Sentence Embedding Community Detection
+
+Sentence embeddings (google/embeddinggemma-300m) were used to construct a cosine similarity graph over the final analysis corpus. Community detection was applied with a grid search over key parameters. The best configuration produced 788 communities, covering 38.5% of posts (17,793 assigned).
+
+![community_wordclouds](img/topic_narrative_discovery/community_wordclouds.png)
+Shows representative sentence-embedding communities. These communities are more semantically coherent than the TF-IDF clusters and capture recurring local patterns such as trust, platform interaction, DeFi activity, memory, and community-building discourse.
+
+#### Characteristics
+- Fine-grained: Communities capture narrow semantic clusters and specific agent behaviours.
+- Low coverage: Only 38.5% of posts are assigned, while 61.5% remain too diverse at this threshold.
+- No keyword labels: Interpretation relies on word clouds, limiting automation.
+- Complementary role: Confirms meaningful semantic structure but is too fragmented for primary use.
+
+---
+
+### Option 2 - BERTopic (Primary Method)
+
+BERTopic was applied using precomputed embeddinggemma-300m embeddings. The pipeline consists of UMAP (5D, cosine metric), HDBSCAN clustering, and c-TF-IDF for keyword extraction.
+
+Optimisation was performed in two stages:
+
+- Stage 1 – Parameter tuning: UMAP and HDBSCAN parameters were tuned to maximise silhouette score. The best configuration achieved 0.6029, producing 925 raw topics.
+- Stage 2 – Topic reduction: The nr_topics parameter was tuned using a composite objective combining coherence (c_v) and a dominance penalty. The penalty activates when the largest topic exceeds , preventing over-merging and ensuring interpretability.
+
+
+After HDBSCAN, nr_topics was selected by maximising a composite score (coherence with a penalty when the largest topic exceeds ), balancing granularity and dominance.
+
+HDBSCAN labels some posts as outliers (topic = -1). These were reassigned to the nearest topic centroid in UMAP space, resulting in full coverage (0% outliers).
+
+Topic 0 is the dominant super-topic (81.3%, 37,601 posts) and reflects shared AI/agent vocabulary. To uncover internal structure, it was re-clustered using TF-IDF + K-Means into 8 interpretable sub-clusters.
+
+| Sub-cluster | Label | Representative Keywords |
+|-------------|-------|------------------------|
+| 0_0 | Platform Posting & Interaction Mechanics | post, comments, moltbook, api, karma, upvotes |
+| 0_1 | Agent Memory & Continuity | memory, context, session, files, continuity |
+| 0_2 | Agent Finance & DeFi Markets | market, price, trading, risk, liquidity |
+| 0_3 | Trust, Security & Identity Infrastructure | trust, api, chain, security, verification |
+| 0_4 | Community Building & Onboarding | community, share, build, join, welcome |
+| 0_5 | General Technical & Model Discourse | data, model, systems, code, question |
+| 0_6 | Multilingual Mixed Discourse | la, que, com, digital |
+| 0_7 | Crypto Wallets & On-Chain Activity | token, wallet, base, json, fees, openclaw |
+
+---
+
+### Method Comparison: Option 1 vs Option 2
+
+| Criterion | Option 1 - Community Detection | Option 2 - BERTopic |
+|----------|--------------------------------|---------------------|
+| Method | Cosine similarity graph + community detection | UMAP + HDBSCAN + c-TF-IDF |
+| Coverage | 38.5% (17,793 posts) | 100% after outlier reassignment |
+| Groups found | 788 communities | 48 topics + 8 Topic 0 sub-clusters |
+| Granularity | Fine-grained, tight local clusters | Coarser, interpretable topic structure |
+| Keyword labels | No (word clouds only) | Yes (c-TF-IDF keywords) |
+| Agreement (ARI) | 0.002 vs BERTopic | - |
+| Agreement (NMI) | 0.233 vs BERTopic | - |
+| Primary use | Baseline, local structure validation | Platform-wide narrative analysis |
+
+The very low ARI (0.002) reflects the different granularity of the methods, with many small communities versus fewer macro-topics. The NMI (0.233) indicates limited but non-zero shared structure.
+
+BERTopic is selected as the primary method due to full coverage, interpretable keyword labels, and suitability for downstream analysis. Community detection is retained as a complementary baseline that confirms the presence of meaningful local semantic patterns.
+
+---
+
+### Model Quality Evaluation
+
+| Metric | Value | Interpretation |
+|-------|------|----------------|
+| Topic Coherence (c_v) | 0.5517 | Good - typical range 0.3-0.7, with values above 0.5 considered strong |
+| Silhouette Score | -0.2727 | Negative - expected for overlapping text topics |
+| ARI (Option 1 vs 2) | 0.002 | Low - different granularity |
+| NMI (Option 1 vs 2) | 0.233 | Moderate shared structure |
+| Chi² p-value (topic × submolt) | < 0.001 | Highly significant |
+| Cramér's V | 0.8327 | Strong association |
+| Outlier posts remaining | 0% | Full coverage |
+| Final discourse themes | 12 | Narrative interpretation |
+
+---
+
+### UMAP Projection of the Corpus
+
+A 2D UMAP projection of the final analysis corpus (46,261 posts) was used to visualise relationships between BERTopic topics in embedding space.
+
+![umap_topic_scatter](img/topic_narrative_discovery/umap_topic_scatter.png)
+Shows the 2D UMAP projection of BERTopic topics. Topic 0 forms a dense central core, while smaller topics appear as peripheral clusters or embedded regions, indicating gradual semantic transitions rather than sharply separated boundaries.
+
+#### Key Observations
+- Topic 0 dominates the centre, supporting its sub-clustering into 8 sub-themes.
+- Some topics form clear peripheral clusters, indicating stronger separation.
+- Most topics overlap within the central region, reflecting shared vocabulary across posts.
+- Elongated structures suggest near-duplicate or templated posts that passed filtering.
+
+---
+
+### Topic Structure and Agent Behaviour
+
+(Cramér’s V = 0.8327, p < 0.001), with most heavily concentrated in Topic 0 and some showing secondary signals in other topics. Most agents (~8,000) post in only 2 topics, with very few exceeding 5, indicating specialised roles, while a small group spans many topics and reflects more general-purpose activity. Topic 0 is dominant across nearly all agents.
+
+![submolt_heatmap](img/topic_narrative_discovery/submolt_topic_heatmap.png)
+Shows the row-normalised topic distribution across the top 25 most active submolts. Most submolts concentrate heavily in Topic 0, with some showing secondary signals in other topics.
+
+![agent_heatmap](img/topic_narrative_discovery/agent_topic_heatmap.png)
+Shows the agent topic participation matrix for the top 30 agents. Most agents are strongly concentrated in Topic 0, with occasional secondary peaks.
+
+![agent_diversity](img/topic_narrative_discovery/agent_topic_diversity.png)
+Shows the distribution of topic diversity per agent. Approximately 8,000 agents post in exactly 2 topics; very few span more than 5.
+
+Based on BERTopic keywords, Topic 0 sub-clustering, and manual review, twelve discourse themes were identified on Moltbook.
+
+| # | Theme | Top Keywords | What it represents |
+|---|-------|-------------|-------------------|
+| 1 | General Technical & Model Discourse | data, model, systems, code, question | Dominant AI/agent discourse — technical discussions about models, systems, and real-world applications. |
+| 2 | Trust, Security & Identity Infrastructure | trust, api, chain, security, verification | Posts about identity, security, and trust mechanisms. |
+| 3 | Platform Posting & Interaction Mechanics | post, comments, moltbook, api, karma, upvotes | Platform usage and interaction mechanics. |
+| 4 | Agent Memory & Continuity | memory, context, session, files, continuity | Persistent memory and agent identity continuity. |
+| 5 | Community Building & Onboarding | community, share, build, join, welcome | Community growth and onboarding. |
+| 6 | Agent Finance & DeFi Markets | market, price, trading, risk, liquidity | Financial and DeFi activity. |
+| 7 | Crypto Wallets & On-Chain Activity | token, wallet, base, json, fees, openclaw | On-chain operations and wallet usage. |
+| 8 | Multilingual Mixed Discourse | la, que, com, digital | Non-English discourse clusters. |
+| 9 | Historical, Spiritual & Ideological Reflection | soviet, god, reminds, man, heart | Ideological and reflective narratives. |
+| 10 | Personal Finance & Risk | income, cost, property, risk, tax | Household-level financial reasoning. |
+| 11 | MBC-20 Token Activity | mbc, mbc 20, mint, op | Token minting and protocol activity. |
+| 12 | Digital Art & Creative Culture | art, artists, gallery, creativity | Creative and artistic expression. |
+
+---
+
+### Conclusions
+
+The Moltbook corpus shows a structured discourse that cannot be captured by lexical methods alone. Embedding-based analysis identifies twelve coherent themes spanning AI-agent discourse, platform governance, financial activity, and multilingual communication.
+
+Topic 0 (81.3%, 37,601 posts) required sub-clustering, producing 8 sub-themes, with General Technical & Model Discourse as the largest (~42.5%). The strong topic–submolt association (Cramér’s V = 0.8327) indicates that submolts function as meaningful thematic communities.
+
+Agent participation is highly specialised, with most agents active in 2–3 topics, while a small group spans many topics, suggesting broader coordination roles.
+
+BERTopic is used as the primary method, with community detection providing complementary validation of local semantic structure.
+
+---
+
+### Summary of Key Metrics
+
+| Metric | Value |
+|------|------|
+| Total posts analysed | 46,261 |
+| Bot posts filtered | 501,003 (19.0%) |
+| Topics discovered | 48 + 8 sub-clusters |
+| Final narrative themes | 12 |
+| Topic Coherence (c_v) | 0.5517 |
+| Cramér's V | 0.8327 (p < 0.001) |
+| Community Detection coverage | 38.5% |
+| BERTopic coverage | 100% |
+
 
 ### Psychographic profiling
 
