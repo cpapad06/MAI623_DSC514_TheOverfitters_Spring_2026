@@ -12,7 +12,7 @@ OCEAN, Schwartz values), then links topics to agent-level trait patterns.
 
 Primary question:
 
-> Do Moltbook agents adapt their language style depending on the submolt (community) context?
+Do Moltbook agents adapt their language style depending on the submolt (community) context?
 
 Operationally, we aim to:
 
@@ -71,6 +71,10 @@ Core tables:
 
 ## Diagrams
 
+### Top-agent activity profile
+
+![Top agents by top-5 submolts](img/top-agents-top5-submolts.svg)
+
 ### End-to-end pipeline
 
 ![Pipeline overview](img/pipeline-overview.svg)
@@ -81,6 +85,12 @@ This diagram summarizes the full experimental flow:
 - branch into topic discovery and psychographic inference,
 - merge both streams into topic-trait linkage analyses and final interpretation outputs.
 
+### Preprocessed dictionary wordclouds
+
+![Preprocessed posts dictionary wordcloud](img/posts-preprocessed-wordcloud.svg)
+
+![Preprocessed comments dictionary wordcloud](img/comments-preprocessed-wordcloud.svg)
+
 ### Topic-to-trait linkage logic
 
 ![Topic to psychographic linkage](img/topic-psych-linkage.svg)
@@ -90,10 +100,6 @@ This diagram zooms into the linkage stage:
 - psychographic dimensions are inferred at post level and aggregated to agents,
 - topic participation is joined with agent traits,
 - outputs include correlation/significance views and archetypal topic-trait statements.
-
-### Top-agent activity profile (new)
-
-![Top agents by top-5 submolts](img/top-agents-top5-submolts.svg)
 
 ## Brief results snapshot
 
@@ -106,6 +112,25 @@ This diagram zooms into the linkage stage:
 - Agent-level participation patterns are easy to inspect through the top-agent/top-submolt stacked visualization.
 
 The detailed outputs are documented under `docs/`. The source in [quarto](https://quarto.org/) is under `src/`.
+
+## Results
+
+**Do agents appear to have different psychographic behavior across submolts?**
+
+Yes, current results indicate meaningful psychographic variation across discourse contexts.
+
+Evidence in the rendered report under `docs/`:
+- Topic-trait significance testing (Kruskal-Wallis with Benjamini-Hochberg correction) reports many dimensions with extremely small corrected p-values (`q_value`), including multiple emotion dimensions and OCEAN/value dimensions.
+- Ranked topic-trait statements show consistent positive and negative deltas versus corpus baselines across distinct narrative clusters (for example, agent/AI and market/trading narratives differ from mbc20-heavy narratives).
+- Topic-level psychographic heatmaps and correlation views show non-uniform trait profiles rather than a single shared psychographic pattern.
+
+Interpretation: within this pipeline, agents do not behave psychographically the same way across all submolts/topics; behavior appears context-sensitive and cluster-dependent.
+
+## Acknowledgements
+
+We thank [Demetris Paschalides](https://www.linkedin.com/in/demetris-paschalides-06ab31156/?lipi=urn%3Ali%3Apage%3Ad_flagship3_search_srp_all%3BslYDprEBSOqfgA1%2BhxOE1A%3D%3D) for his guidance throughout the project.
+
+We also acknowledge the use of AI assistance for parts of the implementation workflow, including generating some of the graphs and helping correctly set up CUDA on our system.
 
 ## Reproducibility
 
