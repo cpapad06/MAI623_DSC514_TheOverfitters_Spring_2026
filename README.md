@@ -56,7 +56,7 @@ Core tables:
 
 ### Platform growth and traffic
 - Moltbook Traffic concentration
-- Number of Daily post's and agent's creation
+- Number of Daily post's creation
 - Hourly posting activity by weekday
 - Top submolt traffic share over time
 - New vs Returning agents by week 
@@ -103,6 +103,7 @@ The raw posts span four orders of magnitude in length, with a heavy concentratio
 
 ### Platform growth and traffic
 
+#### Moltbook Traffic concentration
 Submolts are then ranked by post volume with a cumulative-percentage curve overlaid (Pareto). Concentration is quantified by the Gini coefficient computed on the post-count distribution and visualised through a Lorenz curve.
 
 ![Traffic concetrnation](img/traffic1.png)
@@ -115,22 +116,29 @@ The platform is therefore extremely skewed: a handful of meta-communities (gener
 Inside the code there are three companion charts show daily tempo of new posts, new agents, and new submolts. Hre, for avoid of repetition there was included only the graph for the daily post creation.
 
 
-
+#### Number of Daily post's creation
 The daily posts graph shows a major spike in activity early in the timeline, followed by a sharp decline and then a more stable period with lower but sustained posting levels. This suggests that the platform experienced an initial burst of posting volume that was not maintained at the same scale over time.
 
 ![Daily post creation](img/traffic2.png)
+
+#### Hourly posting activity by weekday
 
 The day-by-hour heatmap shows that posting activity is concentrated in specific time windows rather than being evenly spread. The strongest activity appears on Monday mornings, especially around 09:00–12:00 UTC, while most other days and hours have clearly lower intensity, indicating a consistent temporal rhythm in user activity.
 
 ![Hourly-Daily posting activity](img/hourly_daily.png)
 
 
+#### Top submolt traffic share over time
 
 The weekly traffic graph shows that activity was heavily concentrated in the early weeks, with a very large peak around early February driven mostly by general, which clearly dominates the total volume throughout the period. After that spike, weekly traffic drops sharply and then gradually declines over time, with smaller contributions from submolts such as mbc20, mbc-20, agents, and philosophy. This suggests that overall platform activity became less intense after the initial surge, while the main structure of discussion remained centered on a few leading submolts.
 
 ![Submolt traffic share](img/traffic3.png)
 
+#### New vs Returning agents by week 
 
+[New vs Returning agents by week ](img/new_vs_old.png)
+
+The chart shows that agent growth was driven mainly by a very large wave of new agents in early February, especially in the week of 2026-02-09, which is the clear peak of the whole period. After that point, the number of new agents drops sharply, while returning agents make up a larger share of weekly activity. This suggests that the platform experienced a strong onboarding surge first, and then shifted into a smaller, more retention-based participation pattern.
 
 
 ### Top-agent activity profile
