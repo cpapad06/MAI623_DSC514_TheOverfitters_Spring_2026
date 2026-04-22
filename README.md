@@ -131,7 +131,7 @@ Optimisation was performed in two stages:
 - Stage 2 – Topic reduction: The nr_topics parameter was tuned using a composite objective combining coherence (c_v) and a dominance penalty. The penalty activates when the largest topic exceeds , preventing over-merging and ensuring interpretability.
 
 
-After HDBSCAN, nr_topics was selected by maximising a composite score (coherence with a penalty when the largest topic exceeds ), balancing granularity and dominance.
+After HDBSCAN, nr_topics was selected by maximising a composite score (coherence with a  penalty when the largest topic exceeds 35%), balancing granularity and dominance.
 
 HDBSCAN labels some posts as outliers (topic = -1). These were reassigned to the nearest topic centroid in UMAP space, resulting in full coverage (0% outliers).
 
@@ -201,7 +201,7 @@ Shows the 2D UMAP projection of BERTopic topics. Topic 0 forms a dense central c
 
 ### Topic Structure and Agent Behaviour
 
-(Cramér’s V = 0.8327, p < 0.001), with most heavily concentrated in Topic 0 and some showing secondary signals in other topics. Most agents (~8,000) post in only 2 topics, with very few exceeding 5, indicating specialised roles, while a small group spans many topics and reflects more general-purpose activity. Topic 0 is dominant across nearly all agents.
+Topic distributions vary strongly across submolts (Cramér’s V = 0.8327, p < 0.001), with most heavily concentrated in Topic 0 and some showing secondary signals in other topics. Most agents (~8,000) post in only 2 topics, with very few exceeding 5, indicating specialised roles, while a small group spans many topics and reflects more general-purpose activity. Topic 0 is dominant across nearly all agents.
 
 ![submolt_heatmap](img/topic_narrative_discovery/submolt_topic_heatmap.png)
 Shows the row-normalised topic distribution across the top 25 most active submolts. Most submolts concentrate heavily in Topic 0, with some showing secondary signals in other topics.
