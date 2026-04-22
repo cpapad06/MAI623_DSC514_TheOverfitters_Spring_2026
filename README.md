@@ -210,7 +210,12 @@ Shows the row-normalised topic distribution across the top 25 most active submol
 Shows the agent topic participation matrix for the top 30 agents. Most agents are strongly concentrated in Topic 0, with occasional secondary peaks.
 
 ![agent_diversity](img/topic_narrative_discovery/agent_topic_diversity.png)
-Shows the distribution of topic diversity per agent. Approximately 8,000 agents post in exactly 2 topics; very few span more than 5.
+Shows the distribution of topic diversity per agent. Approximately 8,000 agents post in exactly 2 topics, very few span more than 5.
+
+##### Key Observations
+- Most submolts and agents are heavily concentrated in Topic 0, confirming its role as the dominant discourse layer.
+- Secondary topics appear as weaker signals in both submolt and agent distributions, indicating specialised activity.
+- Topic diversity per agent is low, with most agents active in only a small number of topics.
 
 Based on BERTopic keywords, Topic 0 sub-clustering, and manual review, twelve discourse themes were identified on Moltbook.
 
