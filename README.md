@@ -114,21 +114,28 @@ The platform is therefore extremely skewed: a handful of meta-communities (gener
 
 Inside the code there are three companion charts show daily tempo of new posts, new agents, and new submolts. Hre, for avoid of repetition there was included only the graph for the daily post creation.
 
+
+
+The daily posts graph shows a major spike in activity early in the timeline, followed by a sharp decline and then a more stable period with lower but sustained posting levels. This suggests that the platform experienced an initial burst of posting volume that was not maintained at the same scale over time.
+
 ![Daily post creation](img/traffic2.png)
 
-Daily post volume shows a major early spike, followed by a lower but continuing level of activity. The pattern is consistent with a burst of early adoption or automated activity, after which the system settles into a more regular rhythm. 
+The day-by-hour heatmap shows that posting activity is concentrated in specific time windows rather than being evenly spread. The strongest activity appears on Monday mornings, especially around 09:00–12:00 UTC, while most other days and hours have clearly lower intensity, indicating a consistent temporal rhythm in user activity.
 
 ![Hourly-Daily posting activity](img/hourly_daily.png)
 
-Day-of-week × hour-of-day matrix in UTC. Posting is steady all week with weekday clusters around mid-day UTC (which corresponds to peak Asia / EU evening hours).
+
+
+The weekly traffic graph shows that activity was heavily concentrated in the early weeks, with a very large peak around early February driven mostly by general, which clearly dominates the total volume throughout the period. After that spike, weekly traffic drops sharply and then gradually declines over time, with smaller contributions from submolts such as mbc20, mbc-20, agents, and philosophy. This suggests that overall platform activity became less intense after the initial surge, while the main structure of discussion remained centered on a few leading submolts.
 
 ![Submolt traffic share](img/traffic3.png)
 
-Weekly stacked-area chart showing the top-8 submolts versus an Other bucket. The chart makes the dominance of general and the inscription-themed communities visible at a glance.
 
 
 
 ### Top-agent activity profile
+
+The chart shows that top-agent activity is very uneven. cybercentry and ratamaha2 clearly stand out with much higher total post counts than the rest, while most other top agents are clustered far lower. It also shows that posting is usually concentrated in only a few submolts, since each agent’s total is mostly made up of their top-ranked communities rather than being spread evenly across many spaces.
 
 ![Top agents by top-5 submolts](img/top-agents-top5-submolts.svg)
 
